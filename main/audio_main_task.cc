@@ -102,8 +102,8 @@ void audio_main_task(void* arg) {
 
     // === 本地状态变量 ===
     audio_mode_t mode = AUDIO_MODE_IDLE;
-    int16_t i2s_buffer[512];           // I2S读取缓冲区（512 samples = ~32ms @ 16kHz）
-    int16_t afe_accumulator[960];      // AFE输出累积器（Opus需要960 samples）
+    alignas(16) int16_t i2s_buffer[512];           // I2S读取缓冲区（512 samples = ~32ms @ 16kHz）
+    alignas(16) int16_t afe_accumulator[960];      // AFE输出累积器（Opus需要960 samples）
     size_t afe_accum_count = 0;
 
     uint32_t frame_count = 0;
@@ -495,7 +495,7 @@ void audio_main_task(void* arg) {
                     if (afe_accum_count >= 960) {
                         g_opus_encode_count++;
 
-                        uint8_t opus_packet[512];  // 增大buffer：60ms帧需要>280字节
+                        alignas(16) uint8_t opus_packet[512];  // 增大buffer：60ms帧需要>280字节
                         int opus_len = opus_enc.encode(afe_accumulator, 960,
                                                        opus_packet, sizeof(opus_packet));
 

@@ -828,6 +828,15 @@ void main_control_task(void* arg) {
         ESP_LOGI(TAG, "WiFi connected");
         lvgl_ui_set_state(UI_STATE_WIFI_CONNECTED);
         lvgl_ui_set_status("WiFi connected!");
+
+        // Show device binding info on screen for 8 seconds
+        // so user can note device_id + token for admin dashboard binding
+        static char admin_url[64];
+        snprintf(admin_url, sizeof(admin_url), "http://136.111.249.161/admin");
+        lvgl_ui_show_binding_info(g_device_id, g_device_token, admin_url);
+        ESP_LOGI(TAG, "Showing binding info for 8s: ID=%s Token=%s", g_device_id, g_device_token);
+        vTaskDelay(pdMS_TO_TICKS(8000));
+        lvgl_ui_hide_binding_info();
     } else {
         ESP_LOGW(TAG, "WiFi timeout, running in offline mode");
         lvgl_ui_set_state(UI_STATE_ERROR);

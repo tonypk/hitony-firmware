@@ -40,3 +40,7 @@ void lvgl_ui_set_touch_cb(ui_touch_cb_t cb);
 // Boot-time provisioning trigger
 bool lvgl_ui_wait_for_touch(uint32_t timeout_ms);  // Wait for touch, returns true if touched
 void lvgl_ui_clear_touch_flag();  // Clear touch detection flag
+
+// Device binding info overlay (shown after WiFi connect)
+void lvgl_ui_show_binding_info(const char* device_id, const char* token, const char* admin_url);
+void lvgl_ui_hide_binding_info();

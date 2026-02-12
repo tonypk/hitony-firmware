@@ -30,8 +30,7 @@ static lv_obj_t* status_label = nullptr;
 static lv_obj_t* debug_label = nullptr;  // Debug info label (kept for ESP_LOG, hidden from UI)
 static lv_obj_t* eye_left = nullptr;
 static lv_obj_t* eye_right = nullptr;
-static lv_obj_t* pupil_left = nullptr;   // Black pupil inside left eye
-static lv_obj_t* pupil_right = nullptr;  // Black pupil inside right eye
+// Pupils removed — eyes are solid color shapes
 static lv_obj_t* zzz_label = nullptr;
 
 static lv_obj_t* expr_container = nullptr;
@@ -40,21 +39,6 @@ static lv_obj_t* expr_thumb = nullptr;
 static lv_obj_t* expr_glasses = nullptr;
 static lv_obj_t* expr_pray = nullptr;
 static lv_obj_t* touch_layer = nullptr;
-static lv_obj_t* status_light = nullptr;  // Status indicator light (replaces text)
-
-// Pupil animation state
-static int16_t pupil_left_x = 0;
-static int16_t pupil_left_y = 0;
-static int16_t pupil_right_x = 0;
-static int16_t pupil_right_y = 0;
-#define PUPIL_SIZE       14         // Default pupil diameter
-#define PUPIL_COLOR_HEX  0x1A1A2E  // Very dark blue-black
-#define PUPIL_MAX_OFFSET 12        // Max pixel offset from eye center
-
-// Status light configuration
-#define STATUS_LIGHT_SIZE  10
-static lv_timer_t* light_blink_timer = nullptr;
-static bool light_blink_state = false;
 
 static ui_state_t current_state = UI_STATE_BOOT;
 static ui_expression_t current_expr = UI_EXPR_NONE;
@@ -231,31 +215,6 @@ static void set_expression_visible(ui_expression_t expr) {
     }
 }
 
-// Status light blink callback (for flashing states)
-static void light_blink_cb(lv_timer_t* t) {
-    (void)t;
-    if (!status_light) return;
-    light_blink_state = !light_blink_state;
-    lv_obj_set_style_bg_opa(status_light,
-        light_blink_state ? LV_OPA_COVER : LV_OPA_30, 0);
-}
-
-static void stop_light_blink() {
-    if (light_blink_timer) {
-        lv_timer_del(light_blink_timer);
-        light_blink_timer = nullptr;
-    }
-    light_blink_state = false;
-    if (status_light) {
-        lv_obj_set_style_bg_opa(status_light, LV_OPA_COVER, 0);
-    }
-}
-
-static void start_light_blink(uint32_t period_ms) {
-    stop_light_blink();
-    light_blink_timer = lv_timer_create(light_blink_cb, period_ms, nullptr);
-    lv_timer_set_repeat_count(light_blink_timer, -1);
-}
 
 static void apply_state(void* arg) {
     (void)arg;
@@ -265,7 +224,7 @@ static void apply_state(void* arg) {
         state_timer = nullptr;
     }
 
-    // --- Boot-phase text: visible during startup only ---
+    // --- Status text: visible during boot only, hidden after connected ---
     if (status_label) {
         bool is_boot_phase = (current_state == UI_STATE_BOOT ||
                               current_state == UI_STATE_PROVISIONING ||
@@ -277,67 +236,6 @@ static void apply_state(void* arg) {
             lv_obj_clear_flag(status_label, LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
-        }
-    }
-
-    // Move status light position: below text during boot, top center after
-    if (status_light) {
-        bool is_boot_phase = (current_state == UI_STATE_BOOT ||
-                              current_state == UI_STATE_PROVISIONING ||
-                              current_state == UI_STATE_WIFI_CONNECTING ||
-                              current_state == UI_STATE_WIFI_CONNECTED);
-        if (is_boot_phase) {
-            lv_obj_align(status_light, LV_ALIGN_TOP_MID, 0, 28);
-        } else {
-            lv_obj_align(status_light, LV_ALIGN_TOP_MID, 0, 12);
-        }
-    }
-
-    // --- Status light color & animation per state ---
-    if (status_light) {
-        stop_light_blink();
-        switch (current_state) {
-            case UI_STATE_BOOT:
-            case UI_STATE_PROVISIONING:
-                // Yellow, slow blink
-                lv_obj_set_style_bg_color(status_light, lv_color_hex(0xFFAA00), 0);
-                start_light_blink(800);
-                break;
-            case UI_STATE_WIFI_CONNECTING:
-                // Yellow, fast blink
-                lv_obj_set_style_bg_color(status_light, lv_color_hex(0xFFAA00), 0);
-                start_light_blink(300);
-                break;
-            case UI_STATE_WIFI_CONNECTED:
-                // Blue, steady
-                lv_obj_set_style_bg_color(status_light, lv_color_hex(0x4488FF), 0);
-                break;
-            case UI_STATE_WS_CONNECTED:
-                // Green, steady
-                lv_obj_set_style_bg_color(status_light, lv_color_hex(0x00FF88), 0);
-                break;
-            case UI_STATE_LISTENING:
-                // Red, pulse
-                lv_obj_set_style_bg_color(status_light, lv_color_hex(0xFF4444), 0);
-                start_light_blink(400);
-                break;
-            case UI_STATE_SPEAKING:
-                // Cyan, slow pulse
-                lv_obj_set_style_bg_color(status_light, lv_color_hex(0x00DDFF), 0);
-                start_light_blink(600);
-                break;
-            case UI_STATE_MUSIC:
-                // Purple, steady
-                lv_obj_set_style_bg_color(status_light, lv_color_hex(0xBB44FF), 0);
-                break;
-            case UI_STATE_ERROR:
-                // Red, fast blink
-                lv_obj_set_style_bg_color(status_light, lv_color_hex(0xFF0000), 0);
-                start_light_blink(200);
-                break;
-            default:
-                lv_obj_set_style_bg_color(status_light, lv_color_hex(0x888888), 0);
-                break;
         }
     }
 
@@ -368,40 +266,6 @@ static void apply_state(void* arg) {
         current_base_expr = expr;
     }
 
-    // --- Pupil size responsive to state ---
-    if (pupil_left && pupil_right) {
-        int pupil_sz = PUPIL_SIZE;
-        bool hide_pupils = false;
-        switch (current_state) {
-            case UI_STATE_BOOT:
-            case UI_STATE_PROVISIONING:
-            case UI_STATE_WIFI_CONNECTING:
-                hide_pupils = true;  // Eyes closed (SLEEP), hide pupils
-                break;
-            case UI_STATE_LISTENING:
-                pupil_sz = 18;  // Dilated: attentive
-                break;
-            case UI_STATE_MUSIC:
-                pupil_sz = 16;  // Slightly dilated: enjoying
-                break;
-            case UI_STATE_ERROR:
-                pupil_sz = 10;  // Constricted: distress
-                break;
-            default:
-                pupil_sz = PUPIL_SIZE;
-                break;
-        }
-        if (hide_pupils) {
-            lv_obj_add_flag(pupil_left, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(pupil_right, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_clear_flag(pupil_left, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(pupil_right, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_set_size(pupil_left, pupil_sz, pupil_sz);
-            lv_obj_set_size(pupil_right, pupil_sz, pupil_sz);
-        }
-    }
-
     if (zzz_label) {
         bool sleeping = (current_state == UI_STATE_BOOT);
         if (sleeping) {
@@ -418,30 +282,13 @@ static void blink_cb(lv_timer_t* t) {
 
     if (!eyes_closed) {
         animate_to_expression(EXPR_BLINK, 80);
-        if (pupil_left) lv_obj_add_flag(pupil_left, LV_OBJ_FLAG_HIDDEN);
-        if (pupil_right) lv_obj_add_flag(pupil_right, LV_OBJ_FLAG_HIDDEN);
         eyes_closed = true;
         lv_timer_set_period(t, 120);
     } else {
         animate_to_expression(current_base_expr, 120);
-        if (pupil_left) lv_obj_clear_flag(pupil_left, LV_OBJ_FLAG_HIDDEN);
-        if (pupil_right) lv_obj_clear_flag(pupil_right, LV_OBJ_FLAG_HIDDEN);
         eyes_closed = false;
         lv_timer_set_period(t, 3000 + (rand() % 4000));
     }
-}
-
-// Pupil animation setter callbacks
-static void anim_set_pupil_left_x(void*, int32_t v)  { pupil_left_x = v;  if (pupil_left) lv_obj_align(pupil_left, LV_ALIGN_CENTER, v, pupil_left_y); }
-static void anim_set_pupil_left_y(void*, int32_t v)  { pupil_left_y = v;  if (pupil_left) lv_obj_align(pupil_left, LV_ALIGN_CENTER, pupil_left_x, v); }
-static void anim_set_pupil_right_x(void*, int32_t v) { pupil_right_x = v; if (pupil_right) lv_obj_align(pupil_right, LV_ALIGN_CENTER, v, pupil_right_y); }
-static void anim_set_pupil_right_y(void*, int32_t v) { pupil_right_y = v; if (pupil_right) lv_obj_align(pupil_right, LV_ALIGN_CENTER, pupil_right_x, v); }
-
-static void animate_pupils_to(int16_t lx, int16_t ly, int16_t rx, int16_t ry, uint32_t dur_ms) {
-    start_anim(pupil_left_x,  lx, dur_ms, anim_set_pupil_left_x);
-    start_anim(pupil_left_y,  ly, dur_ms, anim_set_pupil_left_y);
-    start_anim(pupil_right_x, rx, dur_ms, anim_set_pupil_right_x);
-    start_anim(pupil_right_y, ry, dur_ms, anim_set_pupil_right_y);
 }
 
 static void gaze_cb(lv_timer_t* t) {
@@ -455,14 +302,6 @@ static void gaze_cb(lv_timer_t* t) {
     NomiExprId expr = gaze_options[rand() % 6];
     animate_to_expression(expr, 300);
     current_base_expr = expr;
-
-    // Pupil micro-movement: subtle independent offset within the eye
-    if (pupil_left && pupil_right) {
-        int16_t px = (rand() % (PUPIL_MAX_OFFSET * 2 + 1)) - PUPIL_MAX_OFFSET;
-        int16_t py = (rand() % (PUPIL_MAX_OFFSET * 2 + 1)) - PUPIL_MAX_OFFSET;
-        // Both pupils gaze same direction (natural look)
-        animate_pupils_to(px, py, px, py, 400);
-    }
 
     lv_timer_set_period(t, 2000 + (rand() % 3000));
 }
@@ -917,25 +756,6 @@ void lvgl_ui_init() {
     animate_to_expression(EXPR_SLEEP, 0);
     ESP_LOGI(TAG, "Nomi eyes created (color=#%06X)", NOMI_EYE_COLOR_HEX);
 
-    // Create pupils (black circles inside each eye)
-    pupil_left = lv_obj_create(eye_left);
-    lv_obj_set_size(pupil_left, PUPIL_SIZE, PUPIL_SIZE);
-    lv_obj_set_style_radius(pupil_left, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(pupil_left, lv_color_hex(PUPIL_COLOR_HEX), 0);
-    lv_obj_set_style_bg_opa(pupil_left, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(pupil_left, 0, 0);
-    lv_obj_clear_flag(pupil_left, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_align(pupil_left, LV_ALIGN_CENTER, 0, 0);
-
-    pupil_right = lv_obj_create(eye_right);
-    lv_obj_set_size(pupil_right, PUPIL_SIZE, PUPIL_SIZE);
-    lv_obj_set_style_radius(pupil_right, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(pupil_right, lv_color_hex(PUPIL_COLOR_HEX), 0);
-    lv_obj_set_style_bg_opa(pupil_right, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(pupil_right, 0, 0);
-    lv_obj_clear_flag(pupil_right, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_align(pupil_right, LV_ALIGN_CENTER, 0, 0);
-    ESP_LOGI(TAG, "Pupils created (size=%d, color=#%06X)", PUPIL_SIZE, PUPIL_COLOR_HEX);
 
     // Boot-phase status text (shown only during startup, hidden after WS connected)
     status_label = lv_label_create(lv_scr_act());
@@ -944,15 +764,6 @@ void lvgl_ui_init() {
     lv_label_set_text(status_label, state_text(current_state));
     lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 8);
 
-    // Status indicator light (top center, always visible)
-    status_light = lv_obj_create(lv_scr_act());
-    lv_obj_set_size(status_light, STATUS_LIGHT_SIZE, STATUS_LIGHT_SIZE);
-    lv_obj_set_style_radius(status_light, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_border_width(status_light, 0, 0);
-    lv_obj_set_style_bg_color(status_light, lv_color_hex(0xFFAA00), 0);  // Yellow = boot
-    lv_obj_set_style_bg_opa(status_light, LV_OPA_COVER, 0);
-    lv_obj_align(status_light, LV_ALIGN_TOP_MID, 0, 28);  // Below boot text
-    lv_obj_clear_flag(status_light, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
 
     // Fullscreen touch layer
     touch_layer = lv_obj_create(lv_scr_act());
@@ -1091,19 +902,9 @@ void lvgl_ui_update_recording_stats(uint32_t opus_count, bool is_recording) {
 }
 
 void lvgl_ui_set_pupil_offset(int x_offset, int y_offset) {
-    if (!pupil_left || !pupil_right) return;
-    if (!lvgl_lock(50)) return;
-
-    // Clamp offsets
-    int16_t px = (x_offset > PUPIL_MAX_OFFSET) ? PUPIL_MAX_OFFSET :
-                 (x_offset < -PUPIL_MAX_OFFSET) ? -PUPIL_MAX_OFFSET : x_offset;
-    int16_t py = (y_offset > PUPIL_MAX_OFFSET) ? PUPIL_MAX_OFFSET :
-                 (y_offset < -PUPIL_MAX_OFFSET) ? -PUPIL_MAX_OFFSET : y_offset;
-
-    // Move pupils smoothly (both gaze same direction)
-    animate_pupils_to(px, py, px, py, 150);
-
-    lvgl_unlock();
+    // Pupils removed — no-op
+    (void)x_offset;
+    (void)y_offset;
 }
 
 // Boot-time touch detection for provisioning trigger
@@ -1225,5 +1026,106 @@ void lvgl_ui_set_music_energy(float energy) {
     }
 
     last_music_energy = energy;
+    lvgl_unlock();
+}
+
+// === Device Binding Info Overlay ===
+static lv_obj_t* binding_overlay = nullptr;
+
+void lvgl_ui_show_binding_info(const char* device_id, const char* token, const char* admin_url) {
+    if (!lvgl_lock(100)) return;
+
+    if (binding_overlay) {
+        lv_obj_del(binding_overlay);
+        binding_overlay = nullptr;
+    }
+
+    // Semi-transparent dark overlay covering the full screen
+    binding_overlay = lv_obj_create(lv_scr_act());
+    lv_obj_remove_style_all(binding_overlay);
+    lv_obj_set_size(binding_overlay, HITONY_DISPLAY_WIDTH, HITONY_DISPLAY_HEIGHT);
+    lv_obj_align(binding_overlay, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(binding_overlay, lv_color_hex(0x111122), 0);
+    lv_obj_set_style_bg_opa(binding_overlay, LV_OPA_90, 0);
+    lv_obj_set_style_radius(binding_overlay, 180, 0);  // Round for circular display
+    lv_obj_set_style_border_width(binding_overlay, 0, 0);
+    lv_obj_clear_flag(binding_overlay, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Title
+    lv_obj_t* title = lv_label_create(binding_overlay);
+    lv_obj_set_style_text_color(title, lv_color_hex(0x4FC3F7), 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+    lv_label_set_text(title, "Device Binding");
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 60);
+
+    // Device ID
+    lv_obj_t* id_header = lv_label_create(binding_overlay);
+    lv_obj_set_style_text_color(id_header, lv_color_hex(0x888888), 0);
+    lv_obj_set_style_text_font(id_header, &lv_font_montserrat_14, 0);
+    lv_label_set_text(id_header, "Device ID:");
+    lv_obj_align(id_header, LV_ALIGN_TOP_MID, 0, 95);
+
+    lv_obj_t* id_val = lv_label_create(binding_overlay);
+    lv_obj_set_style_text_color(id_val, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(id_val, &lv_font_montserrat_14, 0);
+    lv_label_set_text(id_val, device_id);
+    lv_obj_align(id_val, LV_ALIGN_TOP_MID, 0, 112);
+
+    // Token
+    lv_obj_t* tok_header = lv_label_create(binding_overlay);
+    lv_obj_set_style_text_color(tok_header, lv_color_hex(0x888888), 0);
+    lv_obj_set_style_text_font(tok_header, &lv_font_montserrat_14, 0);
+    lv_label_set_text(tok_header, "Token:");
+    lv_obj_align(tok_header, LV_ALIGN_TOP_MID, 0, 142);
+
+    lv_obj_t* tok_val = lv_label_create(binding_overlay);
+    lv_obj_set_style_text_color(tok_val, lv_color_hex(0x00FF88), 0);
+    lv_obj_set_style_text_font(tok_val, &lv_font_montserrat_14, 0);
+    lv_label_set_text(tok_val, token);
+    lv_obj_align(tok_val, LV_ALIGN_TOP_MID, 0, 159);
+
+    // Separator line
+    lv_obj_t* sep = lv_obj_create(binding_overlay);
+    lv_obj_remove_style_all(sep);
+    lv_obj_set_size(sep, 200, 1);
+    lv_obj_set_style_bg_color(sep, lv_color_hex(0x333355), 0);
+    lv_obj_set_style_bg_opa(sep, LV_OPA_COVER, 0);
+    lv_obj_align(sep, LV_ALIGN_TOP_MID, 0, 190);
+
+    // Admin URL header
+    lv_obj_t* url_header = lv_label_create(binding_overlay);
+    lv_obj_set_style_text_color(url_header, lv_color_hex(0x888888), 0);
+    lv_obj_set_style_text_font(url_header, &lv_font_montserrat_14, 0);
+    lv_label_set_text(url_header, "Bind at:");
+    lv_obj_align(url_header, LV_ALIGN_TOP_MID, 0, 200);
+
+    // Admin URL (may be long, allow wrap)
+    lv_obj_t* url_val = lv_label_create(binding_overlay);
+    lv_obj_set_style_text_color(url_val, lv_color_hex(0x4FC3F7), 0);
+    lv_obj_set_style_text_font(url_val, &lv_font_montserrat_14, 0);
+    lv_obj_set_width(url_val, 240);
+    lv_label_set_long_mode(url_val, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(url_val, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(url_val, admin_url);
+    lv_obj_align(url_val, LV_ALIGN_TOP_MID, 0, 217);
+
+    // Hint at bottom
+    lv_obj_t* hint = lv_label_create(binding_overlay);
+    lv_obj_set_style_text_color(hint, lv_color_hex(0x666666), 0);
+    lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+    lv_label_set_text(hint, "Auto-dismiss in 8s...");
+    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -65);
+
+    ESP_LOGI(TAG, "Binding info shown: ID=%s Token=%s URL=%s", device_id, token, admin_url);
+    lvgl_unlock();
+}
+
+void lvgl_ui_hide_binding_info() {
+    if (!lvgl_lock(100)) return;
+    if (binding_overlay) {
+        lv_obj_del(binding_overlay);
+        binding_overlay = nullptr;
+        ESP_LOGI(TAG, "Binding info hidden");
+    }
     lvgl_unlock();
 }

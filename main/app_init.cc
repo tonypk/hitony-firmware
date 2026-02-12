@@ -49,7 +49,7 @@ bool create_all_tasks() {
         {
             .name = "audio_main",
             .func = audio_main_task,
-            .stack_size = 32768,  // 32KB (从48KB减少，释放16KB RAM)
+            .stack_size = 40960,  // 40KB (Opus encoder needs ~31KB stack)
             .priority = 20,       // 高优先级保证实时性
             .core_id = 1,
             .param = nullptr,
