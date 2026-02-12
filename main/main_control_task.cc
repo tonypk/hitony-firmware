@@ -7,6 +7,8 @@
 #include <esp_websocket_client.h>
 #include <cJSON.h>
 #include <string.h>
+#include <math.h>
+#include <esp_mac.h>
 
 static const char* TAG = "main_ctrl";
 
@@ -35,10 +37,27 @@ static int g_reconnect_attempts = 0;    // 指数退避重连计数（连接成�
 static bool g_auto_listen_enabled = false;  // TTS结束后回到IDLE等待唤醒词（true会导致噪音循环）
 static bool g_music_was_playing = false;    // 音乐因唤醒中断后标记，TTS结束后恢复音乐
 static uint32_t g_thinking_start_time = 0;  // IDLE(Thinking)模式进入时间（用于超时重置UI）
+static uint32_t g_recording_start_time = 0; // [S0-2] 录音FSM开始时间（15s超时保护）
 
 // TTS binary packet counters (file-level for reset on tts_start)
 static uint32_t g_tts_rx_count = 0;    // TTS packets received this session
 static uint32_t g_tts_drop_count = 0;  // TTS packets dropped this session
+
+// [S0-5] 从芯片MAC自动生成设备ID和Token
+static char g_device_id[24] = {0};    // "hitony-AABBCCDDEEFF"
+static char g_device_token[20] = {0}; // MAC反转hex作为简单token
+
+static void init_device_identity() {
+    uint8_t mac[6];
+    esp_efuse_mac_get_default(mac);
+    snprintf(g_device_id, sizeof(g_device_id), "hitony-%02X%02X%02X%02X%02X%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    // Token: 反转MAC字节序 + XOR混淆，简单但唯一
+    snprintf(g_device_token, sizeof(g_device_token), "%02X%02X%02X%02X%02X%02X",
+             mac[5] ^ 0xA5, mac[4] ^ 0x5A, mac[3] ^ 0xA5,
+             mac[2] ^ 0x5A, mac[1] ^ 0xA5, mac[0] ^ 0x5A);
+    ESP_LOGI(TAG, "Device ID: %s, Token: %s", g_device_id, g_device_token);
+}
 
 // Forward declaration
 static void websocket_event_handler(void* handler_args, esp_event_base_t base,
@@ -62,7 +81,7 @@ static void ws_recreate_client() {
     static char ws_headers[128];
     snprintf(ws_headers, sizeof(ws_headers),
              "x-device-id: %s\r\nx-device-token: %s\r\n",
-             HITONY_DEVICE_ID, HITONY_DEVICE_TOKEN);
+             g_device_id, g_device_token);
 
     esp_websocket_client_config_t ws_cfg = {};
     ws_cfg.uri = HITONY_WS_URL;
@@ -148,7 +167,7 @@ static void ws_send_hello() {
     char buf[192];
     snprintf(buf, sizeof(buf),
              "{\"type\":\"hello\",\"device_id\":\"%s\",\"fw\":\"1.0.0\",\"listen_mode\":\"auto\"}",
-             HITONY_DEVICE_ID);
+             g_device_id);
     ws_send_json(buf);
     ESP_LOGI(TAG, "Hello handshake sent, waiting for server response...");
 }
@@ -568,9 +587,14 @@ static void fsm_handle_event(fsm_state_t* state, fsm_event_msg_t event) {
         case FSM_STATE_IDLE:
             if (event.event == FSM_EVENT_WAKE_DETECTED) {
                 *state = FSM_STATE_RECORDING;
-                g_thinking_start_time = 0;  // 清除thinking状态
+                g_thinking_start_time = 0;
+                g_recording_start_time = xTaskGetTickCount();  // [S0-2] 录音开始计时
 
                 ESP_LOGI(TAG, "Wake detected, entering RECORDING mode");
+
+                // [S0-1] 即时视觉反馈：眼睛快速变大+状态灯变红
+                lvgl_ui_set_state(UI_STATE_LISTENING);
+
                 ringbuffer_reset(&g_pcm_ringbuffer);
 
                 // Xiaozhi风格协议: listen(detect) + listen(start, auto)
@@ -581,36 +605,36 @@ static void fsm_handle_event(fsm_state_t* state, fsm_event_msg_t event) {
                 xQueueSend(g_audio_cmd_queue, &cmd, 0);
 
                 led.set_system_state(LedController::SystemState::RECORDING);
-                lvgl_ui_set_status("Listening...");
-                lvgl_ui_set_debug_info("");
 
             } else if (event.event == FSM_EVENT_TTS_START) {
                 *state = FSM_STATE_SPEAKING;
                 g_speaking_start_time = xTaskGetTickCount();
+                g_thinking_start_time = 0;
+                lvgl_ui_set_pupil_offset(0, 0);  // 停止思考动画
 
                 ESP_LOGI(TAG, "TTS start (from IDLE), entering SPEAKING mode");
                 audio_cmd_t cmd_play = AUDIO_CMD_START_PLAYBACK;
                 xQueueSend(g_audio_cmd_queue, &cmd_play, 0);
 
                 led.set_system_state(LedController::SystemState::SPEAKING);
-                lvgl_ui_set_status("Speaking...");
+                lvgl_ui_set_state(UI_STATE_SPEAKING);
 
             } else if (event.event == FSM_EVENT_WS_CONNECTED) {
                 // WebSocket连接成功（在IDLE状态下）
                 led.set_system_state(LedController::SystemState::LISTENING);
-                lvgl_ui_set_status("Server connected");
+                lvgl_ui_set_state(UI_STATE_WS_CONNECTED);
 
             } else if (event.event == FSM_EVENT_WS_DISCONNECTED) {
                 *state = FSM_STATE_ERROR;
                 led.set_system_state(LedController::SystemState::NO_NETWORK);
-                lvgl_ui_set_status("Disconnected");
-                lvgl_ui_set_debug_info("Reconnecting...");
+                lvgl_ui_set_state(UI_STATE_ERROR);
             }
             break;
 
         case FSM_STATE_RECORDING:
             if (event.event == FSM_EVENT_RECORDING_END) {
                 *state = FSM_STATE_IDLE;
+                g_recording_start_time = 0;
                 g_thinking_start_time = xTaskGetTickCount();  // 记录"Thinking"开始时间
 
                 ESP_LOGI(TAG, "Recording end, entering IDLE(Thinking) mode");
@@ -627,11 +651,12 @@ static void fsm_handle_event(fsm_state_t* state, fsm_event_msg_t event) {
                 xQueueSend(g_audio_cmd_queue, &cmd, 0);
 
                 led.set_system_state(LedController::SystemState::THINKING);
-                lvgl_ui_set_status("Thinking...");
+                lvgl_ui_set_state(UI_STATE_WS_CONNECTED);  // Thinking阶段保持WS_CONNECTED灯色
 
             } else if (event.event == FSM_EVENT_TTS_START) {
                 *state = FSM_STATE_SPEAKING;
                 g_speaking_start_time = xTaskGetTickCount();
+                g_recording_start_time = 0;
 
                 ESP_LOGI(TAG, "TTS start, entering SPEAKING mode");
                 audio_cmd_t cmd_rec = AUDIO_CMD_STOP_RECORDING;
@@ -641,19 +666,19 @@ static void fsm_handle_event(fsm_state_t* state, fsm_event_msg_t event) {
                 xQueueSend(g_audio_cmd_queue, &cmd_play, 0);
 
                 led.set_system_state(LedController::SystemState::SPEAKING);
-                lvgl_ui_set_status("Speaking...");
+                lvgl_ui_set_state(UI_STATE_SPEAKING);
 
             } else if (event.event == FSM_EVENT_WS_DISCONNECTED) {
                 ESP_LOGW(TAG, "WebSocket disconnected during RECORDING, stopping");
                 *state = FSM_STATE_ERROR;
                 g_audio_start_sent = false;
+                g_recording_start_time = 0;
 
                 audio_cmd_t cmd = AUDIO_CMD_STOP_RECORDING;
                 xQueueSend(g_audio_cmd_queue, &cmd, 0);
 
                 led.set_system_state(LedController::SystemState::NO_NETWORK);
-                lvgl_ui_set_status("Disconnected");
-                lvgl_ui_set_debug_info("Reconnecting...");
+                lvgl_ui_set_state(UI_STATE_ERROR);
             }
             break;
 
@@ -673,15 +698,15 @@ static void fsm_handle_event(fsm_state_t* state, fsm_event_msg_t event) {
                 audio_cmd_t cmd_stop = AUDIO_CMD_STOP_PLAYBACK;
                 xQueueSend(g_audio_cmd_queue, &cmd_stop, 0);
                 flush_playback_queue();
-                lvgl_ui_set_music_energy(0.0f);  // 隐藏耳机图标（如果之前在MUSIC状态）
+                lvgl_ui_set_music_energy(0.0f);
                 g_tts_end_received = false;
                 g_speaking_start_time = 0;
-                g_drain_wait_count = 0;  // 重置排空计数
+                g_drain_wait_count = 0;
 
                 // 直接进入RECORDING模式
                 *state = FSM_STATE_RECORDING;
+                g_recording_start_time = xTaskGetTickCount();
                 ringbuffer_reset(&g_pcm_ringbuffer);
-                // Xiaozhi风格协议: listen(detect) + listen(start, auto)
                 ws_send_listen("detect", nullptr, "Hi ESP");
                 g_audio_start_sent = ws_send_listen("start", "auto");
 
@@ -689,8 +714,7 @@ static void fsm_handle_event(fsm_state_t* state, fsm_event_msg_t event) {
                 xQueueSend(g_audio_cmd_queue, &cmd_rec, 0);
 
                 led.set_system_state(LedController::SystemState::RECORDING);
-                lvgl_ui_set_status("Listening...");
-                lvgl_ui_set_debug_info("");
+                lvgl_ui_set_state(UI_STATE_LISTENING);
 
             } else if (event.event == FSM_EVENT_WS_DISCONNECTED) {
                 ESP_LOGW(TAG, "WebSocket disconnected during SPEAKING, stopping playback");
@@ -703,8 +727,7 @@ static void fsm_handle_event(fsm_state_t* state, fsm_event_msg_t event) {
                 flush_playback_queue();
 
                 led.set_system_state(LedController::SystemState::NO_NETWORK);
-                lvgl_ui_set_status("Disconnected");
-                lvgl_ui_set_debug_info("Reconnecting...");
+                lvgl_ui_set_state(UI_STATE_ERROR);
             }
             break;
 
@@ -717,10 +740,8 @@ static void fsm_handle_event(fsm_state_t* state, fsm_event_msg_t event) {
                 // 用户在音乐播放期间唤醒 → 暂停音乐，开始录音
                 ESP_LOGI(TAG, "Wake during MUSIC -> pausing music, start recording");
 
-                // 通知服务器暂停音乐流
                 ws_send_json("{\"type\":\"music_ctrl\",\"action\":\"pause\"}");
 
-                // 停止播放
                 audio_cmd_t cmd_stop = AUDIO_CMD_STOP_PLAYBACK;
                 xQueueSend(g_audio_cmd_queue, &cmd_stop, 0);
                 flush_playback_queue();
@@ -728,8 +749,8 @@ static void fsm_handle_event(fsm_state_t* state, fsm_event_msg_t event) {
                 g_drain_wait_count = 0;
                 g_music_was_playing = true;
 
-                // 进入RECORDING模式
                 *state = FSM_STATE_RECORDING;
+                g_recording_start_time = xTaskGetTickCount();
                 ringbuffer_reset(&g_pcm_ringbuffer);
                 ws_send_listen("detect", nullptr, "Hi ESP");
                 g_audio_start_sent = ws_send_listen("start", "auto");
@@ -738,34 +759,31 @@ static void fsm_handle_event(fsm_state_t* state, fsm_event_msg_t event) {
                 xQueueSend(g_audio_cmd_queue, &cmd_rec, 0);
 
                 led.set_system_state(LedController::SystemState::RECORDING);
-                lvgl_ui_set_status("Listening...");
-                lvgl_ui_set_debug_info("");
+                lvgl_ui_set_state(UI_STATE_LISTENING);
 
             } else if (event.event == FSM_EVENT_WS_DISCONNECTED) {
                 ESP_LOGW(TAG, "WebSocket disconnected during MUSIC, stopping playback");
                 *state = FSM_STATE_ERROR;
                 g_tts_end_received = false;
                 g_music_was_playing = false;
-                lvgl_ui_set_music_energy(0.0f);  // 隐藏耳机图标，停止节奏动画
+                lvgl_ui_set_music_energy(0.0f);
 
                 audio_cmd_t cmd = AUDIO_CMD_STOP_PLAYBACK;
                 xQueueSend(g_audio_cmd_queue, &cmd, 0);
                 flush_playback_queue();
 
                 led.set_system_state(LedController::SystemState::NO_NETWORK);
-                lvgl_ui_set_status("Disconnected");
-                lvgl_ui_set_debug_info("Reconnecting...");
+                lvgl_ui_set_state(UI_STATE_ERROR);
             }
             break;
 
         case FSM_STATE_ERROR:
             if (event.event == FSM_EVENT_WS_CONNECTED) {
                 *state = FSM_STATE_IDLE;
-                g_reconnect_attempts = 0;  // 重置退避计数
+                g_reconnect_attempts = 0;
                 ESP_LOGI(TAG, "WebSocket reconnected! Recovering to IDLE");
                 led.set_system_state(LedController::SystemState::LISTENING);
-                lvgl_ui_set_status("Connected");
-                lvgl_ui_set_debug_info("Ready - say 'Hi ESP'");
+                lvgl_ui_set_state(UI_STATE_WS_CONNECTED);
             }
             break;
     }
@@ -782,9 +800,13 @@ static void fsm_handle_event(fsm_state_t* state, fsm_event_msg_t event) {
 void main_control_task(void* arg) {
     ESP_LOGI(TAG, "Main Control Task started on Core %d", xPortGetCoreID());
 
+    // [S0-5] 从芯片MAC生成唯一设备标识
+    init_device_identity();
+
     // === 1. 等待WiFi连接（带超时，每秒更新UI）===
     // 注意：LVGL更新由独立的lvgl_task处理（带互斥锁），这里不调用lv_timer_handler()
     ESP_LOGI(TAG, "Waiting for WiFi connection (timeout: 10s)...");
+    lvgl_ui_set_state(UI_STATE_WIFI_CONNECTING);  // [S1-5] 启动阶段状态灯同步
     lvgl_ui_set_status("Connecting WiFi...");
 
     bool wifi_connected = false;
@@ -804,9 +826,11 @@ void main_control_task(void* arg) {
 
     if (wifi_connected) {
         ESP_LOGI(TAG, "WiFi connected");
+        lvgl_ui_set_state(UI_STATE_WIFI_CONNECTED);
         lvgl_ui_set_status("WiFi connected!");
     } else {
         ESP_LOGW(TAG, "WiFi timeout, running in offline mode");
+        lvgl_ui_set_state(UI_STATE_ERROR);
         lvgl_ui_set_status("Offline mode");
     }
 
@@ -815,7 +839,7 @@ void main_control_task(void* arg) {
         static char ws_headers[128];
         snprintf(ws_headers, sizeof(ws_headers),
                  "x-device-id: %s\r\nx-device-token: %s\r\n",
-                 HITONY_DEVICE_ID, HITONY_DEVICE_TOKEN);
+                 g_device_id, g_device_token);
 
         esp_websocket_client_config_t ws_cfg = {};
         ws_cfg.uri = HITONY_WS_URL;
@@ -925,10 +949,17 @@ void main_control_task(void* arg) {
             }
         }
 
-        // 触摸唤醒：任何状态都接受（不过滤SPEAKING/MUSIC）
+        // [S0-6] 触摸唤醒：即时反馈 + 状态感知行为
         if (audio_bits & AUDIO_EVENT_TOUCH_WAKE) {
             xEventGroupClearBits(g_audio_event_bits, AUDIO_EVENT_TOUCH_WAKE);
             ESP_LOGI(TAG, "Touch wake in state %d", g_current_fsm_state);
+
+            // 即时LED反馈（所有状态通用）
+            LedController::instance().set_system_state(LedController::SystemState::WAKE_DETECTED);
+
+            // 即时瞳孔反馈：快速收缩表示"收到"
+            lvgl_ui_set_pupil_offset(0, 0);
+
             fsm_event_msg_t wake_evt = {.event = FSM_EVENT_WAKE_DETECTED};
             xQueueSend(g_fsm_event_queue, &wake_evt, 0);
         }
@@ -945,6 +976,16 @@ void main_control_task(void* arg) {
         // === 3. 状态相关操作 ===
         switch (g_current_fsm_state) {
             case FSM_STATE_RECORDING: {
+                // [S0-2] 录音15s超时保护：防止VAD失败导致永久录音
+                if (g_recording_start_time > 0 &&
+                    (xTaskGetTickCount() - g_recording_start_time) > pdMS_TO_TICKS(15000)) {
+                    ESP_LOGW(TAG, "RECORDING timeout (15s), forcing end");
+                    g_recording_start_time = 0;
+                    fsm_event_msg_t timeout_evt = {.event = FSM_EVENT_RECORDING_END};
+                    xQueueSend(g_fsm_event_queue, &timeout_evt, 0);
+                    break;
+                }
+
                 if (!g_audio_start_sent && g_ws_client && esp_websocket_client_is_connected(g_ws_client)) {
                     g_audio_start_sent = ws_send_type("audio_start");
                 }
@@ -1017,10 +1058,10 @@ void main_control_task(void* arg) {
                     if (gap_ms < 500) { warned_2s = false; warned_4s = false; }
                 }
 
-                // 5秒超时保护（从10s降至5s：服务器WS_SEND_TIMEOUT=2s，3次超时=6s，5s已足够检测）
+                // [S0-3] 8秒超时保护（从5s放宽至8s：避免首包慢时误触超时）
                 if (g_speaking_start_time > 0 &&
-                    (xTaskGetTickCount() - g_speaking_start_time) > pdMS_TO_TICKS(5000)) {
-                    ESP_LOGW(TAG, "SPEAKING timeout (5s no packet, rx=%lu drop=%lu), sending abort and forcing IDLE",
+                    (xTaskGetTickCount() - g_speaking_start_time) > pdMS_TO_TICKS(8000)) {
+                    ESP_LOGW(TAG, "SPEAKING timeout (8s no packet, rx=%lu drop=%lu), sending abort and forcing IDLE",
                              g_tts_rx_count, g_tts_drop_count);
                     // 通知服务器设备超时，让服务器清理会话状态
                     ws_send_abort("speaking_timeout");
@@ -1035,8 +1076,7 @@ void main_control_task(void* arg) {
 
                     g_current_fsm_state = FSM_STATE_IDLE;
                     led.set_system_state(LedController::SystemState::LISTENING);
-                    lvgl_ui_set_status("Connected");
-                    lvgl_ui_set_debug_info("Ready - say 'Hi ESP'");
+                    lvgl_ui_set_state(UI_STATE_WS_CONNECTED);
                     break;
                 }
 
@@ -1053,36 +1093,32 @@ void main_control_task(void* arg) {
                             audio_cmd_t cmd = AUDIO_CMD_STOP_PLAYBACK;
                             xQueueSend(g_audio_cmd_queue, &cmd, 0);
 
-                            // Auto-listen: TTS结束后自动进入聆听模式（参考xiaozhi AutoStop）
+                            // Auto-listen: TTS结束后自动进入聆听模式
                             if (g_auto_listen_enabled && g_ws_connected) {
                                 ESP_LOGI(TAG, "Playback drained, auto-listen enabled -> entering RECORDING");
                                 g_current_fsm_state = FSM_STATE_RECORDING;
+                                g_recording_start_time = xTaskGetTickCount();
                                 ringbuffer_reset(&g_pcm_ringbuffer);
 
-                                // 发送listen(start, auto)开始新的聆听
                                 g_audio_start_sent = ws_send_listen("start", "auto");
 
                                 audio_cmd_t cmd_rec = AUDIO_CMD_START_RECORDING;
                                 xQueueSend(g_audio_cmd_queue, &cmd_rec, 0);
 
                                 led.set_system_state(LedController::SystemState::RECORDING);
-                                lvgl_ui_set_status("Listening...");
-                                lvgl_ui_set_debug_info("");
+                                lvgl_ui_set_state(UI_STATE_LISTENING);
                             } else if (g_music_was_playing && g_ws_connected) {
-                                // 音乐被唤醒中断后，TTS回复播放完毕，请求恢复音乐
                                 ESP_LOGI(TAG, "Playback drained, requesting music resume");
                                 ws_send_json("{\"type\":\"music_ctrl\",\"action\":\"resume\"}");
-                                // 进入IDLE等待服务器发送music_resume
                                 g_current_fsm_state = FSM_STATE_IDLE;
                                 led.set_system_state(LedController::SystemState::LISTENING);
-                                lvgl_ui_set_status("Resuming music...");
+                                lvgl_ui_set_state(UI_STATE_WS_CONNECTED);
                             } else {
                                 ESP_LOGI(TAG, "Playback drained, entering IDLE");
                                 g_current_fsm_state = FSM_STATE_IDLE;
                                 g_music_was_playing = false;
                                 led.set_system_state(LedController::SystemState::LISTENING);
-                                lvgl_ui_set_status("Connected");
-                                lvgl_ui_set_debug_info("Ready - say 'Hi ESP'");
+                                lvgl_ui_set_state(UI_STATE_WS_CONNECTED);
                             }
                             ESP_LOGI(TAG, "Post-TTS transition (session=%s, WS=%s, auto_listen=%d)",
                                      g_session_id, g_ws_connected ? "connected" : "DISCONNECTED",
@@ -1111,10 +1147,9 @@ void main_control_task(void* arg) {
                             ESP_LOGI(TAG, "Music playback drained, entering IDLE");
                             g_current_fsm_state = FSM_STATE_IDLE;
                             g_music_was_playing = false;
-                            lvgl_ui_set_music_energy(0.0f);  // 隐藏耳机图标，停止节奏动画
+                            lvgl_ui_set_music_energy(0.0f);
                             led.set_system_state(LedController::SystemState::LISTENING);
-                            lvgl_ui_set_status("Connected");
-                            lvgl_ui_set_debug_info("Ready - say 'Hi ESP'");
+                            lvgl_ui_set_state(UI_STATE_WS_CONNECTED);
                         }
                     } else {
                         g_drain_wait_count = 0;
@@ -1132,13 +1167,25 @@ void main_control_task(void* arg) {
                 uint32_t backoff_ms = 3000u << shift;
                 if (backoff_ms > 24000) backoff_ms = 24000;
 
-                if (last_reconnect_tick == 0 ||
-                    (now - last_reconnect_tick) * portTICK_PERIOD_MS > backoff_ms) {
+                uint32_t elapsed_ms = (last_reconnect_tick > 0)
+                    ? (now - last_reconnect_tick) * portTICK_PERIOD_MS : backoff_ms;
+
+                if (last_reconnect_tick == 0 || elapsed_ms > backoff_ms) {
                     ESP_LOGW(TAG, "Reconnect attempt #%d (backoff %lums)...",
                              g_reconnect_attempts + 1, (unsigned long)backoff_ms);
                     ws_recreate_client();
                     last_reconnect_tick = now;
                     g_reconnect_attempts++;
+                } else {
+                    // [S1-2] 每秒更新重连倒计时显示
+                    static uint32_t last_countdown_s = 0;
+                    uint32_t remaining_s = (backoff_ms - elapsed_ms) / 1000;
+                    if (remaining_s != last_countdown_s) {
+                        last_countdown_s = remaining_s;
+                        char buf[32];
+                        snprintf(buf, sizeof(buf), "Reconnect %lus...", (unsigned long)remaining_s);
+                        lvgl_ui_set_status(buf);
+                    }
                 }
                 break;
             }
@@ -1149,9 +1196,29 @@ void main_control_task(void* arg) {
                     (xTaskGetTickCount() - g_thinking_start_time) > pdMS_TO_TICKS(10000)) {
                     ESP_LOGW(TAG, "Thinking timeout (10s), server did not respond with TTS");
                     g_thinking_start_time = 0;
+                    lvgl_ui_set_pupil_offset(0, 0);  // 重置瞳孔位置
                     led.set_system_state(LedController::SystemState::LISTENING);
                     lvgl_ui_set_status("Connected");
                     lvgl_ui_set_debug_info("Ready - say 'Hi ESP'");
+                }
+
+                // [S0-4] 思考动画：瞳孔左右缓慢摆动，表示正在等待服务器响应
+                if (g_thinking_start_time > 0) {
+                    uint32_t elapsed = (xTaskGetTickCount() - g_thinking_start_time) * portTICK_PERIOD_MS;
+                    int x_offset = (int)(8.0f * sinf((float)elapsed / 1000.0f * 3.14159f));
+                    lvgl_ui_set_pupil_offset(x_offset, 0);
+                }
+
+                // [S1-3] g_music_was_playing 10s超时清理：防止音乐恢复请求无响应导致标记永久卡住
+                if (g_music_was_playing && g_thinking_start_time == 0) {
+                    static uint32_t music_flag_set_time = 0;
+                    if (music_flag_set_time == 0) {
+                        music_flag_set_time = xTaskGetTickCount();
+                    } else if ((xTaskGetTickCount() - music_flag_set_time) > pdMS_TO_TICKS(10000)) {
+                        ESP_LOGW(TAG, "g_music_was_playing stuck for 10s, clearing");
+                        g_music_was_playing = false;
+                        music_flag_set_time = 0;
+                    }
                 }
                 break;
             }

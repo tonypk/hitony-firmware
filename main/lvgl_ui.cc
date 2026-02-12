@@ -27,9 +27,11 @@ static lv_disp_draw_buf_t draw_buf;
 static lv_color_t* buf1 = nullptr;
 static lv_color_t* buf2 = nullptr;
 static lv_obj_t* status_label = nullptr;
-static lv_obj_t* debug_label = nullptr;  // Debug info label
+static lv_obj_t* debug_label = nullptr;  // Debug info label (kept for ESP_LOG, hidden from UI)
 static lv_obj_t* eye_left = nullptr;
 static lv_obj_t* eye_right = nullptr;
+static lv_obj_t* pupil_left = nullptr;   // Black pupil inside left eye
+static lv_obj_t* pupil_right = nullptr;  // Black pupil inside right eye
 static lv_obj_t* zzz_label = nullptr;
 
 static lv_obj_t* expr_container = nullptr;
@@ -38,7 +40,21 @@ static lv_obj_t* expr_thumb = nullptr;
 static lv_obj_t* expr_glasses = nullptr;
 static lv_obj_t* expr_pray = nullptr;
 static lv_obj_t* touch_layer = nullptr;
-static lv_obj_t* ws_indicator = nullptr;  // WebSocket connection indicator
+static lv_obj_t* status_light = nullptr;  // Status indicator light (replaces text)
+
+// Pupil animation state
+static int16_t pupil_left_x = 0;
+static int16_t pupil_left_y = 0;
+static int16_t pupil_right_x = 0;
+static int16_t pupil_right_y = 0;
+#define PUPIL_SIZE       14         // Default pupil diameter
+#define PUPIL_COLOR_HEX  0x1A1A2E  // Very dark blue-black
+#define PUPIL_MAX_OFFSET 12        // Max pixel offset from eye center
+
+// Status light configuration
+#define STATUS_LIGHT_SIZE  10
+static lv_timer_t* light_blink_timer = nullptr;
+static bool light_blink_state = false;
 
 static ui_state_t current_state = UI_STATE_BOOT;
 static ui_expression_t current_expr = UI_EXPR_NONE;
@@ -215,19 +231,117 @@ static void set_expression_visible(ui_expression_t expr) {
     }
 }
 
+// Status light blink callback (for flashing states)
+static void light_blink_cb(lv_timer_t* t) {
+    (void)t;
+    if (!status_light) return;
+    light_blink_state = !light_blink_state;
+    lv_obj_set_style_bg_opa(status_light,
+        light_blink_state ? LV_OPA_COVER : LV_OPA_30, 0);
+}
+
+static void stop_light_blink() {
+    if (light_blink_timer) {
+        lv_timer_del(light_blink_timer);
+        light_blink_timer = nullptr;
+    }
+    light_blink_state = false;
+    if (status_light) {
+        lv_obj_set_style_bg_opa(status_light, LV_OPA_COVER, 0);
+    }
+}
+
+static void start_light_blink(uint32_t period_ms) {
+    stop_light_blink();
+    light_blink_timer = lv_timer_create(light_blink_cb, period_ms, nullptr);
+    lv_timer_set_repeat_count(light_blink_timer, -1);
+}
+
 static void apply_state(void* arg) {
     (void)arg;
-    if (status_label) {
-        lv_label_set_text(status_label, state_text(current_state));
-        lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 8);
-    }
 
     if (state_timer) {
         lv_timer_del(state_timer);
         state_timer = nullptr;
     }
 
-    // Nomi eye state mapping
+    // --- Boot-phase text: visible during startup only ---
+    if (status_label) {
+        bool is_boot_phase = (current_state == UI_STATE_BOOT ||
+                              current_state == UI_STATE_PROVISIONING ||
+                              current_state == UI_STATE_WIFI_CONNECTING ||
+                              current_state == UI_STATE_WIFI_CONNECTED);
+        if (is_boot_phase) {
+            lv_label_set_text(status_label, state_text(current_state));
+            lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 8);
+            lv_obj_clear_flag(status_label, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    // Move status light position: below text during boot, top center after
+    if (status_light) {
+        bool is_boot_phase = (current_state == UI_STATE_BOOT ||
+                              current_state == UI_STATE_PROVISIONING ||
+                              current_state == UI_STATE_WIFI_CONNECTING ||
+                              current_state == UI_STATE_WIFI_CONNECTED);
+        if (is_boot_phase) {
+            lv_obj_align(status_light, LV_ALIGN_TOP_MID, 0, 28);
+        } else {
+            lv_obj_align(status_light, LV_ALIGN_TOP_MID, 0, 12);
+        }
+    }
+
+    // --- Status light color & animation per state ---
+    if (status_light) {
+        stop_light_blink();
+        switch (current_state) {
+            case UI_STATE_BOOT:
+            case UI_STATE_PROVISIONING:
+                // Yellow, slow blink
+                lv_obj_set_style_bg_color(status_light, lv_color_hex(0xFFAA00), 0);
+                start_light_blink(800);
+                break;
+            case UI_STATE_WIFI_CONNECTING:
+                // Yellow, fast blink
+                lv_obj_set_style_bg_color(status_light, lv_color_hex(0xFFAA00), 0);
+                start_light_blink(300);
+                break;
+            case UI_STATE_WIFI_CONNECTED:
+                // Blue, steady
+                lv_obj_set_style_bg_color(status_light, lv_color_hex(0x4488FF), 0);
+                break;
+            case UI_STATE_WS_CONNECTED:
+                // Green, steady
+                lv_obj_set_style_bg_color(status_light, lv_color_hex(0x00FF88), 0);
+                break;
+            case UI_STATE_LISTENING:
+                // Red, pulse
+                lv_obj_set_style_bg_color(status_light, lv_color_hex(0xFF4444), 0);
+                start_light_blink(400);
+                break;
+            case UI_STATE_SPEAKING:
+                // Cyan, slow pulse
+                lv_obj_set_style_bg_color(status_light, lv_color_hex(0x00DDFF), 0);
+                start_light_blink(600);
+                break;
+            case UI_STATE_MUSIC:
+                // Purple, steady
+                lv_obj_set_style_bg_color(status_light, lv_color_hex(0xBB44FF), 0);
+                break;
+            case UI_STATE_ERROR:
+                // Red, fast blink
+                lv_obj_set_style_bg_color(status_light, lv_color_hex(0xFF0000), 0);
+                start_light_blink(200);
+                break;
+            default:
+                lv_obj_set_style_bg_color(status_light, lv_color_hex(0x888888), 0);
+                break;
+        }
+    }
+
+    // --- Nomi eye state mapping ---
     if (eye_left && eye_right) {
         NomiExprId expr;
         switch (current_state) {
@@ -254,26 +368,46 @@ static void apply_state(void* arg) {
         current_base_expr = expr;
     }
 
+    // --- Pupil size responsive to state ---
+    if (pupil_left && pupil_right) {
+        int pupil_sz = PUPIL_SIZE;
+        bool hide_pupils = false;
+        switch (current_state) {
+            case UI_STATE_BOOT:
+            case UI_STATE_PROVISIONING:
+            case UI_STATE_WIFI_CONNECTING:
+                hide_pupils = true;  // Eyes closed (SLEEP), hide pupils
+                break;
+            case UI_STATE_LISTENING:
+                pupil_sz = 18;  // Dilated: attentive
+                break;
+            case UI_STATE_MUSIC:
+                pupil_sz = 16;  // Slightly dilated: enjoying
+                break;
+            case UI_STATE_ERROR:
+                pupil_sz = 10;  // Constricted: distress
+                break;
+            default:
+                pupil_sz = PUPIL_SIZE;
+                break;
+        }
+        if (hide_pupils) {
+            lv_obj_add_flag(pupil_left, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(pupil_right, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_clear_flag(pupil_left, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(pupil_right, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_size(pupil_left, pupil_sz, pupil_sz);
+            lv_obj_set_size(pupil_right, pupil_sz, pupil_sz);
+        }
+    }
+
     if (zzz_label) {
         bool sleeping = (current_state == UI_STATE_BOOT);
         if (sleeping) {
             lv_obj_clear_flag(zzz_label, LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(zzz_label, LV_OBJ_FLAG_HIDDEN);
-        }
-    }
-
-    // Update WebSocket connection indicator
-    if (ws_indicator) {
-        if (current_state == UI_STATE_WS_CONNECTED ||
-            current_state == UI_STATE_LISTENING ||
-            current_state == UI_STATE_SPEAKING ||
-            current_state == UI_STATE_MUSIC) {
-            // Green = WebSocket connected
-            lv_obj_set_style_bg_color(ws_indicator, lv_color_hex(0x00FF00), 0);
-        } else {
-            // Red = WebSocket disconnected
-            lv_obj_set_style_bg_color(ws_indicator, lv_color_hex(0xFF0000), 0);
         }
     }
 }
@@ -284,13 +418,30 @@ static void blink_cb(lv_timer_t* t) {
 
     if (!eyes_closed) {
         animate_to_expression(EXPR_BLINK, 80);
+        if (pupil_left) lv_obj_add_flag(pupil_left, LV_OBJ_FLAG_HIDDEN);
+        if (pupil_right) lv_obj_add_flag(pupil_right, LV_OBJ_FLAG_HIDDEN);
         eyes_closed = true;
         lv_timer_set_period(t, 120);
     } else {
         animate_to_expression(current_base_expr, 120);
+        if (pupil_left) lv_obj_clear_flag(pupil_left, LV_OBJ_FLAG_HIDDEN);
+        if (pupil_right) lv_obj_clear_flag(pupil_right, LV_OBJ_FLAG_HIDDEN);
         eyes_closed = false;
         lv_timer_set_period(t, 3000 + (rand() % 4000));
     }
+}
+
+// Pupil animation setter callbacks
+static void anim_set_pupil_left_x(void*, int32_t v)  { pupil_left_x = v;  if (pupil_left) lv_obj_align(pupil_left, LV_ALIGN_CENTER, v, pupil_left_y); }
+static void anim_set_pupil_left_y(void*, int32_t v)  { pupil_left_y = v;  if (pupil_left) lv_obj_align(pupil_left, LV_ALIGN_CENTER, pupil_left_x, v); }
+static void anim_set_pupil_right_x(void*, int32_t v) { pupil_right_x = v; if (pupil_right) lv_obj_align(pupil_right, LV_ALIGN_CENTER, v, pupil_right_y); }
+static void anim_set_pupil_right_y(void*, int32_t v) { pupil_right_y = v; if (pupil_right) lv_obj_align(pupil_right, LV_ALIGN_CENTER, pupil_right_x, v); }
+
+static void animate_pupils_to(int16_t lx, int16_t ly, int16_t rx, int16_t ry, uint32_t dur_ms) {
+    start_anim(pupil_left_x,  lx, dur_ms, anim_set_pupil_left_x);
+    start_anim(pupil_left_y,  ly, dur_ms, anim_set_pupil_left_y);
+    start_anim(pupil_right_x, rx, dur_ms, anim_set_pupil_right_x);
+    start_anim(pupil_right_y, ry, dur_ms, anim_set_pupil_right_y);
 }
 
 static void gaze_cb(lv_timer_t* t) {
@@ -304,6 +455,14 @@ static void gaze_cb(lv_timer_t* t) {
     NomiExprId expr = gaze_options[rand() % 6];
     animate_to_expression(expr, 300);
     current_base_expr = expr;
+
+    // Pupil micro-movement: subtle independent offset within the eye
+    if (pupil_left && pupil_right) {
+        int16_t px = (rand() % (PUPIL_MAX_OFFSET * 2 + 1)) - PUPIL_MAX_OFFSET;
+        int16_t py = (rand() % (PUPIL_MAX_OFFSET * 2 + 1)) - PUPIL_MAX_OFFSET;
+        // Both pupils gaze same direction (natural look)
+        animate_pupils_to(px, py, px, py, 400);
+    }
 
     lv_timer_set_period(t, 2000 + (rand() % 3000));
 }
@@ -327,12 +486,7 @@ static void touch_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
         data->point.x = x[0];
         data->point.y = y[0];
 
-        // 更新屏幕显示触摸信息
-        if (debug_label) {
-            char info[128];
-            snprintf(info, sizeof(info), "Touch: x=%d y=%d #%lu", x[0], y[0], touch_count);
-            lv_label_set_text(debug_label, info);
-        }
+        ESP_LOGD(TAG, "Touch: x=%d y=%d #%lu", x[0], y[0], touch_count);
 
         // 触摸唤醒：触发录音模式
         static uint32_t last_touch_time = 0;
@@ -341,15 +495,7 @@ static void touch_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
         // 防抖：3秒冷却时间
         if (now - last_touch_time > pdMS_TO_TICKS(3000)) {
             wake_trigger_count++;
-            ESP_LOGI(TAG, "✅ Touch wake! Triggering recording mode... (wake #%lu)", wake_trigger_count);
-
-            // 更新屏幕状态显示
-            if (status_label) {
-                char status[64];
-                snprintf(status, sizeof(status), "🎤 Recording... (touch #%lu)", wake_trigger_count);
-                lv_label_set_text(status_label, status);
-                lv_obj_set_style_text_color(status_label, lv_color_hex(0xFF4444), 0);  // Red
-            }
+            ESP_LOGI(TAG, "Touch wake! Triggering recording mode... (wake #%lu)", wake_trigger_count);
 
             // 发送触摸唤醒事件（使用独立事件位，不受SPEAKING/MUSIC过滤）
             xEventGroupSetBits(g_audio_event_bits, AUDIO_EVENT_TOUCH_WAKE);
@@ -771,22 +917,42 @@ void lvgl_ui_init() {
     animate_to_expression(EXPR_SLEEP, 0);
     ESP_LOGI(TAG, "Nomi eyes created (color=#%06X)", NOMI_EYE_COLOR_HEX);
 
-    // Status text (top)
+    // Create pupils (black circles inside each eye)
+    pupil_left = lv_obj_create(eye_left);
+    lv_obj_set_size(pupil_left, PUPIL_SIZE, PUPIL_SIZE);
+    lv_obj_set_style_radius(pupil_left, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(pupil_left, lv_color_hex(PUPIL_COLOR_HEX), 0);
+    lv_obj_set_style_bg_opa(pupil_left, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(pupil_left, 0, 0);
+    lv_obj_clear_flag(pupil_left, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(pupil_left, LV_ALIGN_CENTER, 0, 0);
+
+    pupil_right = lv_obj_create(eye_right);
+    lv_obj_set_size(pupil_right, PUPIL_SIZE, PUPIL_SIZE);
+    lv_obj_set_style_radius(pupil_right, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(pupil_right, lv_color_hex(PUPIL_COLOR_HEX), 0);
+    lv_obj_set_style_bg_opa(pupil_right, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(pupil_right, 0, 0);
+    lv_obj_clear_flag(pupil_right, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(pupil_right, LV_ALIGN_CENTER, 0, 0);
+    ESP_LOGI(TAG, "Pupils created (size=%d, color=#%06X)", PUPIL_SIZE, PUPIL_COLOR_HEX);
+
+    // Boot-phase status text (shown only during startup, hidden after WS connected)
     status_label = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_color(status_label, lv_color_white(), 0);
+    lv_obj_set_style_text_color(status_label, lv_color_hex(0xAAAAAA), 0);  // Dim gray
     lv_obj_set_style_text_font(status_label, &lv_font_montserrat_14, 0);
     lv_label_set_text(status_label, state_text(current_state));
     lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 8);
 
-    // WebSocket connection indicator (top-right corner)
-    ws_indicator = lv_obj_create(lv_scr_act());
-    lv_obj_set_size(ws_indicator, 12, 12);
-    lv_obj_set_style_radius(ws_indicator, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_border_width(ws_indicator, 0, 0);
-    lv_obj_set_style_bg_color(ws_indicator, lv_color_hex(0xFF0000), 0);  // Red = disconnected
-    lv_obj_set_style_bg_opa(ws_indicator, LV_OPA_COVER, 0);
-    lv_obj_align(ws_indicator, LV_ALIGN_TOP_RIGHT, -8, 8);
-    lv_obj_clear_flag(ws_indicator, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    // Status indicator light (top center, always visible)
+    status_light = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(status_light, STATUS_LIGHT_SIZE, STATUS_LIGHT_SIZE);
+    lv_obj_set_style_radius(status_light, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(status_light, 0, 0);
+    lv_obj_set_style_bg_color(status_light, lv_color_hex(0xFFAA00), 0);  // Yellow = boot
+    lv_obj_set_style_bg_opa(status_light, LV_OPA_COVER, 0);
+    lv_obj_align(status_light, LV_ALIGN_TOP_MID, 0, 28);  // Below boot text
+    lv_obj_clear_flag(status_light, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
 
     // Fullscreen touch layer
     touch_layer = lv_obj_create(lv_scr_act());
@@ -880,11 +1046,13 @@ void lvgl_ui_init_touch(void* i2c_bus_handle) {
 }
 
 void lvgl_ui_set_status(const char* text) {
-    if (!status_label) return;
-    if (lvgl_lock(50)) {
-        lv_label_set_text(status_label, text);
-        lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 8);
-        lv_obj_set_style_text_color(status_label, lv_color_white(), 0);
+    // During boot phase, update the visible boot text.
+    // After boot, status is shown via status_light color only.
+    if (status_label && lvgl_lock(50)) {
+        if (!lv_obj_has_flag(status_label, LV_OBJ_FLAG_HIDDEN)) {
+            lv_label_set_text(status_label, text);
+            lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 8);
+        }
         lvgl_unlock();
     }
 }
@@ -912,54 +1080,28 @@ void lvgl_ui_set_touch_cb(ui_touch_cb_t cb) {
 }
 
 void lvgl_ui_set_debug_info(const char* info) {
-    if (!debug_label) return;
-    if (lvgl_lock(50)) {
-        lv_label_set_text(debug_label, info);
-        lv_obj_align(debug_label, LV_ALIGN_CENTER, 0, 40);
-        lvgl_unlock();
-    }
+    // Debug info is now log-only, not displayed on screen.
+    ESP_LOGD(TAG, "Debug: %s", info);
 }
 
 void lvgl_ui_update_recording_stats(uint32_t opus_count, bool is_recording) {
-    if (!lvgl_lock(50)) return;
-
-    // 更新中间调试信息
-    if (debug_label) {
-        char info[128];
-        if (is_recording) {
-            snprintf(info, sizeof(info), "Recording | Opus: %lu | Touch: %lu",
-                     opus_count, touch_count);
-        } else {
-            snprintf(info, sizeof(info), "Idle | Encoded: %lu | Touch: %lu",
-                     opus_count, touch_count);
-        }
-        lv_label_set_text(debug_label, info);
-        lv_obj_align(debug_label, LV_ALIGN_CENTER, 0, 40);
-    }
-
-    // 更新顶部状态信息
-    if (status_label && is_recording) {
-        char status[64];
-        snprintf(status, sizeof(status), "Recording... Encoded %lu pkts", opus_count);
-        lv_label_set_text(status_label, status);
-        lv_obj_set_style_text_color(status_label, lv_color_hex(0xFF4444), 0);  // Red
-    }
-
-    lvgl_unlock();
+    // Stats are log-only now (no on-screen text)
+    ESP_LOGD(TAG, "Recording stats: opus=%lu recording=%d touch=%lu",
+             opus_count, is_recording, touch_count);
 }
 
 void lvgl_ui_set_pupil_offset(int x_offset, int y_offset) {
-    if (!eye_left || !eye_right) return;
+    if (!pupil_left || !pupil_right) return;
     if (!lvgl_lock(50)) return;
 
-    NomiExprId expr;
-    if (x_offset < -3) expr = EXPR_LOOK_LEFT;
-    else if (x_offset > 3) expr = EXPR_LOOK_RIGHT;
-    else if (y_offset < -3) expr = EXPR_LOOK_UP;
-    else expr = EXPR_NORMAL;
+    // Clamp offsets
+    int16_t px = (x_offset > PUPIL_MAX_OFFSET) ? PUPIL_MAX_OFFSET :
+                 (x_offset < -PUPIL_MAX_OFFSET) ? -PUPIL_MAX_OFFSET : x_offset;
+    int16_t py = (y_offset > PUPIL_MAX_OFFSET) ? PUPIL_MAX_OFFSET :
+                 (y_offset < -PUPIL_MAX_OFFSET) ? -PUPIL_MAX_OFFSET : y_offset;
 
-    animate_to_expression(expr, 200);
-    current_base_expr = expr;
+    // Move pupils smoothly (both gaze same direction)
+    animate_pupils_to(px, py, px, py, 150);
 
     lvgl_unlock();
 }
