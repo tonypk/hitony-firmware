@@ -499,8 +499,10 @@ static void handle_ws_text(const char* data, uint16_t len) {
     } else if (strcmp(type->valuestring, "music_start") == 0) {
         ESP_LOGI(TAG, "Server: Music start");
         cJSON* title = cJSON_GetObjectItem(root, "title");
+        const char* title_str = "";
         if (cJSON_IsString(title)) {
-            ESP_LOGI(TAG, "Music title: %s", title->valuestring);
+            title_str = title->valuestring;
+            ESP_LOGI(TAG, "Music title: %s", title_str);
         }
 
         const char* state_names[] = {"IDLE", "RECORDING", "SPEAKING", "MUSIC", "ERROR"};
@@ -523,12 +525,15 @@ static void handle_ws_text(const char* data, uint16_t len) {
 
         LedController::instance().set_system_state(LedController::SystemState::SPEAKING);
         lvgl_ui_set_state(UI_STATE_MUSIC);
-        lvgl_ui_set_status("Music");
+        if (title_str[0]) {
+            lvgl_ui_set_music_title(title_str);
+        }
 
         ESP_LOGI(TAG, "FSM: %s -> MUSIC (music_start)", state_names[prev_state]);
 
     } else if (strcmp(type->valuestring, "music_end") == 0) {
         ESP_LOGI(TAG, "Server: Music end");
+        lvgl_ui_hide_music_title();
         if (g_current_fsm_state == FSM_STATE_MUSIC) {
             fsm_event_msg_t evt = {.event = FSM_EVENT_TTS_END};
             xQueueSend(g_fsm_event_queue, &evt, 0);
@@ -550,7 +555,6 @@ static void handle_ws_text(const char* data, uint16_t len) {
 
             LedController::instance().set_system_state(LedController::SystemState::SPEAKING);
             lvgl_ui_set_state(UI_STATE_MUSIC);
-            lvgl_ui_set_status("Music");
             ESP_LOGI(TAG, "FSM: -> MUSIC (resume)");
         } else {
             ESP_LOGW(TAG, "music_resume ignored (no paused music)");

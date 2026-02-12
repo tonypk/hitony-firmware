@@ -32,6 +32,8 @@ void lvgl_ui_set_debug_info(const char* info);  // Update debug info display
 void lvgl_ui_update_recording_stats(uint32_t opus_count, bool is_recording);  // Update recording stats
 void lvgl_ui_set_pupil_offset(int x_offset, int y_offset);  // Manually move pupils (-10 to 10 range)
 void lvgl_ui_set_music_energy(float energy);  // Update music rhythm animation (0.0-1.0, called during playback)
+void lvgl_ui_set_music_title(const char* title);  // Show song title during music playback
+void lvgl_ui_hide_music_title();  // Hide song title
 void lcd_only_test();
 
 typedef void (*ui_touch_cb_t)(bool pressed);

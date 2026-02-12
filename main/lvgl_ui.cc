@@ -299,6 +299,15 @@ static void apply_state(void* arg) {
             lv_obj_add_flag(zzz_label, LV_OBJ_FLAG_HIDDEN);
         }
     }
+
+    // Show/hide music title based on MUSIC state
+    if (music_title_label) {
+        if (current_state == UI_STATE_MUSIC && music_title_buf[0]) {
+            lv_obj_clear_flag(music_title_label, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(music_title_label, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 }
 
 static void blink_cb(lv_timer_t* t) {
@@ -1087,6 +1096,43 @@ bool lvgl_ui_wait_for_touch(uint32_t timeout_ms) {
 
 void lvgl_ui_clear_touch_flag() {
     g_boot_touch_detected = false;
+}
+
+// === Music Title Display ===
+static lv_obj_t* music_title_label = nullptr;
+static char music_title_buf[128] = {0};
+
+void lvgl_ui_set_music_title(const char* title) {
+    if (!title || !title[0]) return;
+    if (!lvgl_lock(100)) return;
+
+    snprintf(music_title_buf, sizeof(music_title_buf), "%s", title);
+
+    if (!music_title_label) {
+        music_title_label = lv_label_create(lv_scr_act());
+        lv_obj_set_style_text_color(music_title_label, lv_color_hex(0xE0E0E0), 0);
+        lv_obj_set_style_text_font(music_title_label, &lv_font_simsun_16_cjk, 0);
+        lv_obj_set_width(music_title_label, 240);
+        lv_obj_set_style_text_align(music_title_label, LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_long_mode(music_title_label, LV_LABEL_LONG_SCROLL_CIRCULAR);
+        lv_obj_clear_flag(music_title_label, LV_OBJ_FLAG_CLICKABLE);
+    }
+
+    lv_label_set_text(music_title_label, music_title_buf);
+    lv_obj_align(music_title_label, LV_ALIGN_BOTTOM_MID, 0, -30);
+    lv_obj_clear_flag(music_title_label, LV_OBJ_FLAG_HIDDEN);
+
+    ESP_LOGI(TAG, "Music title display: %s", music_title_buf);
+    lvgl_unlock();
+}
+
+void lvgl_ui_hide_music_title() {
+    if (!lvgl_lock(10)) return;
+    music_title_buf[0] = '\0';
+    if (music_title_label) {
+        lv_obj_add_flag(music_title_label, LV_OBJ_FLAG_HIDDEN);
+    }
+    lvgl_unlock();
 }
 
 // === Music Rhythm Animation ===

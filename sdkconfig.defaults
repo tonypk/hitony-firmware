@@ -114,3 +114,11 @@ CONFIG_HTTPD_MAX_URI_LEN=128
 # 使用 "Hi ESP" 唤醒词 - 最省内存（约100-150KB vs 200-250KB）
 CONFIG_SR_WN_WN9_HIESP=y
 # CONFIG_SR_WN_WN9_NIHAOXIAOZHI_TTS is not set
+
+# ============================================================================
+# LVGL Fonts (display CJK song titles)
+# ============================================================================
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_18=y
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_SIMSUN_16_CJK=y
