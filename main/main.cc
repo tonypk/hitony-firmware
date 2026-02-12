@@ -284,8 +284,8 @@ extern "C" void app_main() {
     // Phase 2: 检测配网模式（优先检测，决定后续初始化）
     // ========================================================================
     ESP_LOGI(TAG, "[Phase 2] Checking for provisioning trigger...");
-    lvgl_ui_set_status("Touch screen to configure WiFi (5s)");
-    lvgl_ui_set_debug_info("Touch to enter WiFi setup...");
+    lvgl_ui_set_status("Touch to setup WiFi...");
+    lvgl_ui_set_debug_info("");
 
     bool force_provisioning = lvgl_ui_wait_for_touch(5000);  // Wait 5 seconds
 

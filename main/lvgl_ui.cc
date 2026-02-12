@@ -257,7 +257,7 @@ static void apply_state(void* arg) {
                               current_state == UI_STATE_WIFI_CONNECTED);
         if (is_boot_phase) {
             lv_label_set_text(status_label, state_text(current_state));
-            lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 8);
+            lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 35);
             lv_obj_clear_flag(status_label, LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
@@ -884,10 +884,13 @@ void lvgl_ui_init() {
 
     // Boot-phase status text (shown only during startup, hidden after WS connected)
     status_label = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_color(status_label, lv_color_hex(0xAAAAAA), 0);  // Dim gray
-    lv_obj_set_style_text_font(status_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(status_label, lv_color_hex(0xCCCCCC), 0);
+    lv_obj_set_style_text_font(status_label, &lv_font_montserrat_18, 0);
+    lv_obj_set_width(status_label, 280);
+    lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(status_label, LV_LABEL_LONG_WRAP);
     lv_label_set_text(status_label, state_text(current_state));
-    lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 8);
+    lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 35);
 
 
     // Fullscreen touch layer
@@ -1011,12 +1014,10 @@ void lvgl_ui_init_touch(void* i2c_bus_handle) {
 }
 
 void lvgl_ui_set_status(const char* text) {
-    // During boot phase, update the visible boot text.
-    // After boot, status is shown via status_light color only.
     if (status_label && lvgl_lock(50)) {
         if (!lv_obj_has_flag(status_label, LV_OBJ_FLAG_HIDDEN)) {
             lv_label_set_text(status_label, text);
-            lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 8);
+            lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 35);
         }
         lvgl_unlock();
     }

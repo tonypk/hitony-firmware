@@ -237,12 +237,18 @@ static void websocket_event_handler(void* handler_args, esp_event_base_t base,
         }
 
         case WEBSOCKET_EVENT_DATA: {
-            if (data->data_len <= 0 || data->data_len >= 4096) {
-                ESP_LOGW(TAG, "WS data: invalid len=%d, op=0x%02X", data->data_len, data->op_code);
+            uint8_t opcode = data->op_code;
+
+            // Ping (0x09) and Pong (0x0A) are handled by ESP-IDF internally, ignore silently
+            if (opcode == 0x09 || opcode == 0x0A) {
                 break;
             }
 
-            uint8_t opcode = data->op_code;
+            if (data->data_len <= 0 || data->data_len >= 4096) {
+                ESP_LOGW(TAG, "WS data: invalid len=%d, op=0x%02X", data->data_len, opcode);
+                break;
+            }
+
             if (opcode != 0x01 && opcode != 0x02) {
                 ESP_LOGW(TAG, "WS data: unexpected opcode=0x%02X, len=%d", opcode, data->data_len);
                 break;
