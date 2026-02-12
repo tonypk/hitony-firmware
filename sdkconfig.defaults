@@ -1,0 +1,116 @@
+CONFIG_ESP_WIFI_SSID="ChinaNet-NPYCDK"
+CONFIG_ESP_WIFI_PASSWORD="88889999"
+
+# ============================================================================
+# Target Configuration (MUST be ESP32-S3)
+# ============================================================================
+CONFIG_IDF_TARGET="esp32s3"
+
+# ============================================================================
+# PSRAM Configuration (CRITICAL - 8MB PSRAM必须启用)
+# ============================================================================
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# PSRAM memory allocation
+CONFIG_SPIRAM_USE_MALLOC=y
+# 小于2KB的分配总是使用内部RAM（参考xiaozhi成功配置，从16KB改为2KB）
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=2048
+# 保留96KB内部RAM用于任务栈和系统关键数据（参考xiaozhi，从32KB增加到96KB）
+# 这是解决内存耗尽崩溃的关键！确保有足够内部RAM给任务栈
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=98304
+
+# 禁用PSRAM栈以获得更好性能和稳定性（参考xiaozhi成功配置）
+# CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY is not set
+
+# WiFi/LWIP can use PSRAM
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
+# ============================================================================
+# ESP32-S3 Configuration
+# ============================================================================
+CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240=y
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+
+# ============================================================================
+# Flash Configuration (ESP32-S3 has 16MB flash)
+# ============================================================================
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+
+# ============================================================================
+# Partition Table Configuration
+# ============================================================================
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# ============================================================================
+# FreeRTOS Configuration (内存优化)
+# ============================================================================
+CONFIG_FREERTOS_HZ=1000
+CONFIG_FREERTOS_IDLE_TASK_STACKSIZE=1024
+CONFIG_FREERTOS_ISR_STACKSIZE=1024
+CONFIG_FREERTOS_TIMER_TASK_STACK_DEPTH=2048
+
+# ============================================================================
+# Memory Optimization (关键优化)
+# ============================================================================
+# 编译器优化 - 优化大小而非速度
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_SILENT=y
+
+# Log level - 减少日志输出节省内存和CPU
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_INFO=y
+
+# Task watchdog - 减小超时时间
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=5
+
+# Main task stack size - 减小主任务栈
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=3072
+
+# System event task - 减小事件任务栈
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=2048
+
+# ============================================================================
+# WiFi Configuration (平衡配置：支持TTS burst + 配网模式)
+# ============================================================================
+# Dynamic buffers使用PSRAM (CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y)
+# Static buffers使用内部RAM，适度增加以支持TTS数据突发
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_TX_BUFFER_TYPE=0
+CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=4
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
+# AMPDU必须启用：TTS数据突发需要聚合帧，否则只能收到几个包
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=y
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=y
+CONFIG_ESP_WIFI_NVS_ENABLED=y
+CONFIG_ESP_WIFI_CACHE_TX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_MAX_AP_CONNECTIONS=1
+
+# ============================================================================
+# LWIP Configuration (平衡配置：支持TTS数据流)
+# ============================================================================
+CONFIG_LWIP_MAX_SOCKETS=8
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=8192
+CONFIG_LWIP_TCP_WND_DEFAULT=8192
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=8
+CONFIG_LWIP_UDP_RECVMBOX_SIZE=6
+CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=16
+CONFIG_LWIP_TCPIP_TASK_STACK_SIZE=2560
+
+# ============================================================================
+# HTTP Server Configuration (优化)
+# ============================================================================
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+CONFIG_HTTPD_MAX_URI_LEN=128
+
+# ============================================================================
+# ESP-SR wakenet model (built-in)
+# ============================================================================
+# 使用 "Hi ESP" 唤醒词 - 最省内存（约100-150KB vs 200-250KB）
+CONFIG_SR_WN_WN9_HIESP=y
+# CONFIG_SR_WN_WN9_NIHAOXIAOZHI_TTS is not set

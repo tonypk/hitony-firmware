@@ -1,0 +1,11 @@
+dependencies:
+  espressif/cjson: "^1.7.0"
+  espressif/esp-sr: "~2.3.0"
+  espressif/esp_codec_dev: "^1.1.3"
+  espressif/esp_websocket_client: "^1.6.1"
+  espressif/esp_lcd_st77916: "^1.0.1"
+  espressif/esp_lcd_touch_ft5x06: "^1.0.0"
+  espressif/esp_lcd_touch_cst816s: "^1.0.0"
+  lvgl/lvgl: "^8.3.0"
+  espressif/esp_audio_codec: "~2.4.1"    # Opus编解码器
+  espressif/esp_audio_effects: "~1.2.1"  # 音频效果（可选）

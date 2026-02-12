@@ -1,0 +1,27 @@
+menu "EchoEar WiFi"
+
+config ESP_WIFI_SSID
+    string "WiFi SSID"
+    default "YOUR_WIFI_SSID"
+
+config ESP_WIFI_PASSWORD
+    string "WiFi Password"
+    default "YOUR_WIFI_PASSWORD"
+
+endmenu
+
+menu "EchoEar Provisioning AP"
+
+config ECHOEAR_AP_SSID_PREFIX
+    string "AP SSID prefix"
+    default "EchoEar"
+    help
+        Device will expose an AP named <prefix>-XXXX where XXXX is MAC suffix.
+
+config ECHOEAR_AP_PASSWORD
+    string "AP password"
+    default ""
+    help
+        WPA2 password for provisioning AP (min 8 chars). Leave empty for open AP.
+
+endmenu
