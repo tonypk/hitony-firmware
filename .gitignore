@@ -9,7 +9,7 @@ dependencies.lock
 managed_components/
 
 # IDE
-.vscode/
+# .vscode/  # Commented out - we want to share VSCode ESP-IDF settings
 .idea/
 *.swp
 *.swo

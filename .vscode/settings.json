@@ -1,0 +1,21 @@
+{
+    "idf.currentSetup": "/Users/anna/.espressif/v5.5.2/esp-idf",
+    "git.autofetch": true,
+    "git.confirmSync": false,
+    "git.enableSmartCommit": true,
+    "editor.formatOnSave": false,
+    "C_Cpp.clang_format_fallbackStyle": "{ BasedOnStyle: Google, IndentWidth: 4, ColumnLimit: 120 }",
+    "files.exclude": {
+        "**/build": true,
+        "**/.venv": true,
+        "**/__pycache__": true
+    },
+    "files.watcherExclude": {
+        "**/build/**": true,
+        "**/managed_components/**": true
+    },
+    "files.associations": {
+        "*.h": "c",
+        "*.cc": "cpp"
+    }
+}
