@@ -46,7 +46,7 @@ void audio_main_task(void* arg) {
     //   ✅ 修复成功：使用afe_config_init()替代手动配置
     AdvancedAFE afe;
     AdvancedAFE::Config afe_cfg = {
-        .sample_rate = ECHOEAR_SAMPLE_RATE,
+        .sample_rate = HITONY_SAMPLE_RATE,
         .channels = 2,           // 双麦克风
         .frame_size = 256,       // 每通道256 samples（匹配feed调用的256）
         .enable_aec = false,     // AEC禁用："MMR"格式导致AFE零输出（ESP-SR bug/限制），改用"MM"格式+WakeNet自身抗噪能力

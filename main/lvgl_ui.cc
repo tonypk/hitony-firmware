@@ -373,7 +373,7 @@ static void touch_event_cb(lv_event_t* e) {
     }
 }
 
-// EchoEar vendor init sequence (from official EchoEar config)
+// HiTony vendor init sequence (from official HiTony config)
 static const st77916_lcd_init_cmd_t vendor_specific_init_yysj[] = {
     {0xF0, (uint8_t []){0x28}, 1, 0},
     {0xF2, (uint8_t []){0x28}, 1, 0},
@@ -586,73 +586,73 @@ static void flush_cb(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t* colo
 }
 
 static void set_backlight_level(int level) {
-    if (ECHOEAR_QSPI_BL != GPIO_NUM_NC) {
-        ESP_ERROR_CHECK(gpio_set_level(ECHOEAR_QSPI_BL, level));
+    if (HITONY_QSPI_BL != GPIO_NUM_NC) {
+        ESP_ERROR_CHECK(gpio_set_level(HITONY_QSPI_BL, level));
     }
-    if (ECHOEAR_QSPI_BL_ALT != GPIO_NUM_NC) {
-        ESP_ERROR_CHECK(gpio_set_level(ECHOEAR_QSPI_BL_ALT, level));
+    if (HITONY_QSPI_BL_ALT != GPIO_NUM_NC) {
+        ESP_ERROR_CHECK(gpio_set_level(HITONY_QSPI_BL_ALT, level));
     }
 }
 
 static void init_display() {
-    // Power control (EchoEar board sets GPIO9 low)
-    if (ECHOEAR_POWER_CTRL != GPIO_NUM_NC) {
+    // Power control (HiTony board sets GPIO9 low)
+    if (HITONY_POWER_CTRL != GPIO_NUM_NC) {
         gpio_config_t pwr_cfg = {};
         pwr_cfg.mode = GPIO_MODE_OUTPUT;
-        pwr_cfg.pin_bit_mask = (1ULL << ECHOEAR_POWER_CTRL);
+        pwr_cfg.pin_bit_mask = (1ULL << HITONY_POWER_CTRL);
         ESP_ERROR_CHECK(gpio_config(&pwr_cfg));
-        ESP_ERROR_CHECK(gpio_set_level(ECHOEAR_POWER_CTRL, 0));
-        ESP_LOGI(TAG, "LCD power ctrl LOW on GPIO%d", (int)ECHOEAR_POWER_CTRL);
+        ESP_ERROR_CHECK(gpio_set_level(HITONY_POWER_CTRL, 0));
+        ESP_LOGI(TAG, "LCD power ctrl LOW on GPIO%d", (int)HITONY_POWER_CTRL);
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 
     spi_bus_config_t bus_cfg = {};
-#if ECHOEAR_LCD_USE_QSPI
-    bus_cfg = ECHOEAR_ST77916_PANEL_BUS_QSPI_CONFIG(
-        ECHOEAR_QSPI_PCLK,
-        ECHOEAR_QSPI_D0,
-        ECHOEAR_QSPI_D1,
-        ECHOEAR_QSPI_D2,
-        ECHOEAR_QSPI_D3,
-        ECHOEAR_DISPLAY_WIDTH * 80 * sizeof(uint16_t));
+#if HITONY_LCD_USE_QSPI
+    bus_cfg = HITONY_ST77916_PANEL_BUS_QSPI_CONFIG(
+        HITONY_QSPI_PCLK,
+        HITONY_QSPI_D0,
+        HITONY_QSPI_D1,
+        HITONY_QSPI_D2,
+        HITONY_QSPI_D3,
+        HITONY_DISPLAY_WIDTH * 80 * sizeof(uint16_t));
 #else
-    bus_cfg.sclk_io_num = ECHOEAR_QSPI_PCLK;
-    bus_cfg.mosi_io_num = ECHOEAR_LCD_SPI_MOSI;
+    bus_cfg.sclk_io_num = HITONY_QSPI_PCLK;
+    bus_cfg.mosi_io_num = HITONY_LCD_SPI_MOSI;
     bus_cfg.miso_io_num = -1;
     bus_cfg.quadwp_io_num = -1;
     bus_cfg.quadhd_io_num = -1;
     bus_cfg.flags = 0;
 #endif
-    bus_cfg.max_transfer_sz = ECHOEAR_DISPLAY_WIDTH * 80 * sizeof(uint16_t);
+    bus_cfg.max_transfer_sz = HITONY_DISPLAY_WIDTH * 80 * sizeof(uint16_t);
     bus_cfg.intr_flags = 0;
-    ESP_ERROR_CHECK(spi_bus_initialize(ECHOEAR_QSPI_LCD_HOST, &bus_cfg, SPI_DMA_CH_AUTO));
+    ESP_ERROR_CHECK(spi_bus_initialize(HITONY_QSPI_LCD_HOST, &bus_cfg, SPI_DMA_CH_AUTO));
 
-#if ECHOEAR_LCD_USE_QSPI
-    esp_lcd_panel_io_spi_config_t io_cfg = ST77916_PANEL_IO_QSPI_CONFIG(ECHOEAR_QSPI_CS, NULL, NULL);
+#if HITONY_LCD_USE_QSPI
+    esp_lcd_panel_io_spi_config_t io_cfg = ST77916_PANEL_IO_QSPI_CONFIG(HITONY_QSPI_CS, NULL, NULL);
 #else
-    esp_lcd_panel_io_spi_config_t io_cfg = ST77916_PANEL_IO_SPI_CONFIG(ECHOEAR_QSPI_CS, ECHOEAR_QSPI_DC, NULL, NULL);
+    esp_lcd_panel_io_spi_config_t io_cfg = ST77916_PANEL_IO_SPI_CONFIG(HITONY_QSPI_CS, HITONY_QSPI_DC, NULL, NULL);
 #endif
-    io_cfg.pclk_hz = ECHOEAR_LCD_USE_QSPI ? 10000000 : 100000;
+    io_cfg.pclk_hz = HITONY_LCD_USE_QSPI ? 10000000 : 100000;
     io_cfg.spi_mode = 0;
     ESP_LOGI(TAG, "LCD SPI: mode=%d pclk=%dHz CS=%d",
-             io_cfg.spi_mode, (int)io_cfg.pclk_hz, (int)ECHOEAR_QSPI_CS);
-    ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)ECHOEAR_QSPI_LCD_HOST, &io_cfg, &panel_io));
+             io_cfg.spi_mode, (int)io_cfg.pclk_hz, (int)HITONY_QSPI_CS);
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)HITONY_QSPI_LCD_HOST, &io_cfg, &panel_io));
 
     st77916_vendor_config_t vendor_config = {};
-    if (ECHOEAR_LCD_USE_CUSTOM_INIT) {
+    if (HITONY_LCD_USE_CUSTOM_INIT) {
         vendor_config.init_cmds = vendor_specific_init_yysj;
         vendor_config.init_cmds_size = sizeof(vendor_specific_init_yysj) / sizeof(st77916_lcd_init_cmd_t);
     } else {
         vendor_config.init_cmds = nullptr;
         vendor_config.init_cmds_size = 0;
     }
-    vendor_config.flags.use_qspi_interface = ECHOEAR_LCD_USE_QSPI ? 1 : 0;
+    vendor_config.flags.use_qspi_interface = HITONY_LCD_USE_QSPI ? 1 : 0;
 
     esp_lcd_panel_dev_config_t panel_cfg = {};
-    panel_cfg.reset_gpio_num = ECHOEAR_QSPI_RST;
+    panel_cfg.reset_gpio_num = HITONY_QSPI_RST;
     panel_cfg.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB;
-    panel_cfg.bits_per_pixel = ECHOEAR_LCD_BITS_PER_PIXEL;
-    panel_cfg.flags.reset_active_high = ECHOEAR_LCD_RESET_ACTIVE_HIGH;
+    panel_cfg.bits_per_pixel = HITONY_LCD_BITS_PER_PIXEL;
+    panel_cfg.flags.reset_active_high = HITONY_LCD_RESET_ACTIVE_HIGH;
     panel_cfg.vendor_config = &vendor_config;
     ESP_ERROR_CHECK(esp_lcd_new_panel_st77916(panel_io, &panel_cfg, &panel));
 
@@ -660,13 +660,13 @@ static void init_display() {
     ESP_ERROR_CHECK(esp_lcd_panel_init(panel));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel, true));
     vTaskDelay(pdMS_TO_TICKS(120));
-    esp_lcd_panel_swap_xy(panel, ECHOEAR_DISPLAY_SWAP_XY);
-    esp_lcd_panel_mirror(panel, ECHOEAR_DISPLAY_MIRROR_X, ECHOEAR_DISPLAY_MIRROR_Y);
+    esp_lcd_panel_swap_xy(panel, HITONY_DISPLAY_SWAP_XY);
+    esp_lcd_panel_mirror(panel, HITONY_DISPLAY_MIRROR_X, HITONY_DISPLAY_MIRROR_Y);
 
     // Backlight on (assume active-low; keep steady)
     uint64_t bl_mask = 0;
-    int bl = (int)ECHOEAR_QSPI_BL;
-    int bl_alt = (int)ECHOEAR_QSPI_BL_ALT;
+    int bl = (int)HITONY_QSPI_BL;
+    int bl_alt = (int)HITONY_QSPI_BL_ALT;
     if (bl >= 0) {
         bl_mask |= (1ULL << (uint32_t)bl);
     }
@@ -681,23 +681,23 @@ static void init_display() {
         if (bl_err != ESP_OK) {
             ESP_LOGW(TAG, "Backlight gpio_config failed (mask=0x%llx, err=0x%x)", (unsigned long long)bl_mask, bl_err);
         } else {
-            int on_level = ECHOEAR_BL_ACTIVE_LOW ? 0 : 1;
-            ESP_LOGI(TAG, "Backlight pins: BL=%d BL_ALT=%d active_low=%d", bl, bl_alt, ECHOEAR_BL_ACTIVE_LOW);
+            int on_level = HITONY_BL_ACTIVE_LOW ? 0 : 1;
+            ESP_LOGI(TAG, "Backlight pins: BL=%d BL_ALT=%d active_low=%d", bl, bl_alt, HITONY_BL_ACTIVE_LOW);
             set_backlight_level(on_level);
             ESP_LOGI(TAG, "Backlight set to ON (level=%d)", on_level);
         }
     }
 
-#if ECHOEAR_LCD_ONLY_TEST
+#if HITONY_LCD_ONLY_TEST
     // Raw panel color test (bypass LVGL) to verify bus/panel works
     {
-        uint16_t* line = (uint16_t*)heap_caps_malloc(ECHOEAR_DISPLAY_WIDTH * sizeof(uint16_t), MALLOC_CAP_DMA);
+        uint16_t* line = (uint16_t*)heap_caps_malloc(HITONY_DISPLAY_WIDTH * sizeof(uint16_t), MALLOC_CAP_DMA);
         if (line) {
             const uint16_t colors[4] = {0xFFFF, 0xF800, 0x07E0, 0x001F}; // white/red/green/blue
             for (int c = 0; c < 4; ++c) {
-                for (int i = 0; i < ECHOEAR_DISPLAY_WIDTH; ++i) line[i] = colors[c];
-                for (int y = 0; y < ECHOEAR_DISPLAY_HEIGHT; ++y) {
-                    esp_lcd_panel_draw_bitmap(panel, 0, y, ECHOEAR_DISPLAY_WIDTH, y + 1, line);
+                for (int i = 0; i < HITONY_DISPLAY_WIDTH; ++i) line[i] = colors[c];
+                for (int y = 0; y < HITONY_DISPLAY_HEIGHT; ++y) {
+                    esp_lcd_panel_draw_bitmap(panel, 0, y, HITONY_DISPLAY_WIDTH, y + 1, line);
                 }
                 ESP_LOGI(TAG, "Panel color test %d/4", c + 1);
                 vTaskDelay(pdMS_TO_TICKS(600));
@@ -723,15 +723,15 @@ void lvgl_ui_init() {
     lv_init();
     init_display();
 
-    size_t buf_pixels = ECHOEAR_DISPLAY_WIDTH * 40;
+    size_t buf_pixels = HITONY_DISPLAY_WIDTH * 40;
     buf1 = (lv_color_t*)heap_caps_malloc(buf_pixels * sizeof(lv_color_t), MALLOC_CAP_DMA);
     buf2 = (lv_color_t*)heap_caps_malloc(buf_pixels * sizeof(lv_color_t), MALLOC_CAP_DMA);
     lv_disp_draw_buf_init(&draw_buf, buf1, buf2, buf_pixels);
 
     static lv_disp_drv_t disp_drv;
     lv_disp_drv_init(&disp_drv);
-    disp_drv.hor_res = ECHOEAR_DISPLAY_WIDTH;
-    disp_drv.ver_res = ECHOEAR_DISPLAY_HEIGHT;
+    disp_drv.hor_res = HITONY_DISPLAY_WIDTH;
+    disp_drv.ver_res = HITONY_DISPLAY_HEIGHT;
     disp_drv.flush_cb = flush_cb;
     disp_drv.draw_buf = &draw_buf;
     lv_disp_drv_register(&disp_drv);
@@ -792,7 +792,7 @@ void lvgl_ui_init() {
     touch_layer = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(touch_layer);
     lv_obj_set_style_bg_opa(touch_layer, LV_OPA_TRANSP, 0);
-    lv_obj_set_size(touch_layer, ECHOEAR_DISPLAY_WIDTH, ECHOEAR_DISPLAY_HEIGHT);
+    lv_obj_set_size(touch_layer, HITONY_DISPLAY_WIDTH, HITONY_DISPLAY_HEIGHT);
     lv_obj_align(touch_layer, LV_ALIGN_CENTER, 0, 0);
     lv_obj_clear_flag(touch_layer, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(touch_layer, LV_OBJ_FLAG_CLICKABLE);
@@ -827,21 +827,21 @@ void lvgl_ui_init_touch(void* i2c_bus_handle) {
     esp_lcd_panel_io_i2c_config_t tp_io_config = ESP_LCD_TOUCH_IO_I2C_CST816S_CONFIG();
 
     ESP_LOGI(TAG, "Touch I2C: port=%d SDA=%d SCL=%d INT=%d",
-        (int)ECHOEAR_I2C_PORT, (int)ECHOEAR_I2C_SDA, (int)ECHOEAR_I2C_SCL, (int)ECHOEAR_TP_INT);
+        (int)HITONY_I2C_PORT, (int)HITONY_I2C_SDA, (int)HITONY_I2C_SCL, (int)HITONY_TP_INT);
 
     // Optional reset pulse for touch controller
-    if (ECHOEAR_TP_RST != GPIO_NUM_NC) {
+    if (HITONY_TP_RST != GPIO_NUM_NC) {
         gpio_config_t rst_cfg = {};
         rst_cfg.mode = GPIO_MODE_OUTPUT;
-        rst_cfg.pin_bit_mask = (1ULL << (uint32_t)ECHOEAR_TP_RST);
+        rst_cfg.pin_bit_mask = (1ULL << (uint32_t)HITONY_TP_RST);
         ESP_ERROR_CHECK(gpio_config(&rst_cfg));
-        gpio_set_level(ECHOEAR_TP_RST, 0);
+        gpio_set_level(HITONY_TP_RST, 0);
         vTaskDelay(pdMS_TO_TICKS(10));
-        gpio_set_level(ECHOEAR_TP_RST, 1);
+        gpio_set_level(HITONY_TP_RST, 1);
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 
-    // EchoEar uses CST816S at 0x15 on the shared audio I2C bus
+    // HiTony uses CST816S at 0x15 on the shared audio I2C bus
     const uint8_t use_addr = ESP_LCD_TOUCH_IO_I2C_CST816S_ADDRESS;
     if (i2c_master_probe(touch_i2c_bus, use_addr, pdMS_TO_TICKS(100)) != ESP_OK) {
         ESP_LOGW(TAG, "Touch I2C probe failed (no device at 0x%02x)", use_addr);
@@ -855,15 +855,15 @@ void lvgl_ui_init_touch(void* i2c_bus_handle) {
     }
 
     esp_lcd_touch_config_t tp_cfg = {};
-    tp_cfg.x_max = ECHOEAR_DISPLAY_WIDTH;
-    tp_cfg.y_max = ECHOEAR_DISPLAY_HEIGHT;
-    tp_cfg.rst_gpio_num = ECHOEAR_TP_RST;
-    tp_cfg.int_gpio_num = ECHOEAR_TP_INT;
+    tp_cfg.x_max = HITONY_DISPLAY_WIDTH;
+    tp_cfg.y_max = HITONY_DISPLAY_HEIGHT;
+    tp_cfg.rst_gpio_num = HITONY_TP_RST;
+    tp_cfg.int_gpio_num = HITONY_TP_INT;
     tp_cfg.levels.reset = 0;
     tp_cfg.levels.interrupt = 0;
-    tp_cfg.flags.swap_xy = ECHOEAR_DISPLAY_SWAP_XY;
-    tp_cfg.flags.mirror_x = ECHOEAR_DISPLAY_MIRROR_X;
-    tp_cfg.flags.mirror_y = ECHOEAR_DISPLAY_MIRROR_Y;
+    tp_cfg.flags.swap_xy = HITONY_DISPLAY_SWAP_XY;
+    tp_cfg.flags.mirror_x = HITONY_DISPLAY_MIRROR_X;
+    tp_cfg.flags.mirror_y = HITONY_DISPLAY_MIRROR_Y;
 
     esp_err_t tp_err = esp_lcd_touch_new_i2c_cst816s(tp_io_handle, &tp_cfg, &touch_handle);
     if (tp_err != ESP_OK) {

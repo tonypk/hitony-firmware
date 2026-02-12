@@ -38,7 +38,7 @@ if (count % 20 == 0) {  // 每20秒打印一次详细报告
 
 // Phase 7: 初始化LED控制器
 ESP_LOGI(TAG, "[Phase 7] Initializing LED controller...");
-if (!LedController::instance().init(ECHOEAR_LED_G)) {
+if (!LedController::instance().init(HITONY_LED_G)) {
     ESP_LOGE(TAG, "Failed to init LED controller!");
 }
 if (!LedController::instance().start()) {
@@ -163,7 +163,7 @@ idf.py monitor
 A: 确保CMakeLists.txt中添加了 `driver` 到REQUIRES列表
 
 ### Q: LED不亮或闪烁异常
-A: 检查GPIO引脚配置，确认ECHOEAR_LED_G定义正确
+A: 检查GPIO引脚配置，确认HITONY_LED_G定义正确
 
 ### Q: 系统监控数据全为0
 A: 确保调用了 `init()` 和 `start()`

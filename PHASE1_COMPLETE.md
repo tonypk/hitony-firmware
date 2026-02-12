@@ -71,7 +71,7 @@ WebSocket → WS接收队列 → Opus解码 → 解码队列 → 混音 → 输�
 ### 方式1：完整替换（推荐）
 
 ```bash
-cd /Users/anna/Documents/xiaozhi/echoear-firmware/main
+cd /Users/anna/Documents/xiaozhi/hitony-firmware/main
 
 # 备份旧main.cc
 mv main.cc main_old.cc
@@ -127,7 +127,7 @@ create_all_tasks();
 ### 1. 编译测试
 
 ```bash
-cd /Users/anna/Documents/xiaozhi/echoear-firmware
+cd /Users/anna/Documents/xiaozhi/hitony-firmware
 
 # 使用新main.cc
 mv main/main.cc main/main_old.cc
@@ -169,7 +169,7 @@ I (xxx) task_mgr: Created task: audio_input (stack=8192, prio=20, core=1)
 I (xxx) task_mgr: Created task: audio_output (stack=8192, prio=19, core=1)
 ...
 I (xxx) main: [Phase 5] Startup complete!
-I (xxx) main: EchoEar is ready! 🎤
+I (xxx) main: HiTony is ready! 🎤
 ```
 
 **每10秒打印心跳**：

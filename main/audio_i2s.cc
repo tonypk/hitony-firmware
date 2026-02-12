@@ -22,9 +22,9 @@ bool AudioI2S::init_i2c_only() {
     // I2C master for touch sensor (and later for codec)
     i2c_master_bus_config_t i2c_bus_cfg = {};
     i2c_bus_cfg.clk_source = I2C_CLK_SRC_DEFAULT;
-    i2c_bus_cfg.i2c_port = ECHOEAR_I2C_PORT;
-    i2c_bus_cfg.sda_io_num = ECHOEAR_I2C_SDA;
-    i2c_bus_cfg.scl_io_num = ECHOEAR_I2C_SCL;
+    i2c_bus_cfg.i2c_port = HITONY_I2C_PORT;
+    i2c_bus_cfg.sda_io_num = HITONY_I2C_SDA;
+    i2c_bus_cfg.scl_io_num = HITONY_I2C_SCL;
     i2c_bus_cfg.glitch_ignore_cnt = 7;
     i2c_bus_cfg.flags.enable_internal_pullup = true;
 
@@ -52,15 +52,15 @@ bool AudioI2S::init() {
     // Power up codec and PA
     gpio_config_t io_conf = {};
     io_conf.mode = GPIO_MODE_OUTPUT;
-    io_conf.pin_bit_mask = (1ULL << ECHOEAR_CODEC_PWR) | (1ULL << ECHOEAR_CODEC_PA);
-#if ECHOEAR_CODEC_PA2 != ECHOEAR_I2S_DIN
-    io_conf.pin_bit_mask |= (1ULL << ECHOEAR_CODEC_PA2);
+    io_conf.pin_bit_mask = (1ULL << HITONY_CODEC_PWR) | (1ULL << HITONY_CODEC_PA);
+#if HITONY_CODEC_PA2 != HITONY_I2S_DIN
+    io_conf.pin_bit_mask |= (1ULL << HITONY_CODEC_PA2);
 #endif
     ESP_ERROR_CHECK(gpio_config(&io_conf));
-    ESP_ERROR_CHECK(gpio_set_level(ECHOEAR_CODEC_PWR, 1));
-    ESP_ERROR_CHECK(gpio_set_level(ECHOEAR_CODEC_PA, 1));
-#if ECHOEAR_CODEC_PA2 != ECHOEAR_I2S_DIN
-    ESP_ERROR_CHECK(gpio_set_level(ECHOEAR_CODEC_PA2, 1));
+    ESP_ERROR_CHECK(gpio_set_level(HITONY_CODEC_PWR, 1));
+    ESP_ERROR_CHECK(gpio_set_level(HITONY_CODEC_PA, 1));
+#if HITONY_CODEC_PA2 != HITONY_I2S_DIN
+    ESP_ERROR_CHECK(gpio_set_level(HITONY_CODEC_PA2, 1));
 #endif
 
     // I2C已在init_i2c_only()中创建，这里不再重复创建
@@ -77,7 +77,7 @@ bool AudioI2S::init() {
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, (i2s_chan_handle_t*)&tx_chan_, (i2s_chan_handle_t*)&rx_chan_));
 
     i2s_std_config_t std_cfg = {};
-    std_cfg.clk_cfg.sample_rate_hz = ECHOEAR_SAMPLE_RATE;
+    std_cfg.clk_cfg.sample_rate_hz = HITONY_SAMPLE_RATE;
     std_cfg.clk_cfg.clk_src = I2S_CLK_SRC_DEFAULT;
     std_cfg.clk_cfg.ext_clk_freq_hz = 0;
     std_cfg.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
@@ -91,17 +91,17 @@ bool AudioI2S::init() {
     std_cfg.slot_cfg.left_align = true;
     std_cfg.slot_cfg.big_endian = false;
     std_cfg.slot_cfg.bit_order_lsb = false;
-    std_cfg.gpio_cfg.mclk = ECHOEAR_I2S_MCLK;
-    std_cfg.gpio_cfg.bclk = ECHOEAR_I2S_BCLK;
-    std_cfg.gpio_cfg.ws = ECHOEAR_I2S_WS;
-    std_cfg.gpio_cfg.dout = ECHOEAR_I2S_DOUT;
+    std_cfg.gpio_cfg.mclk = HITONY_I2S_MCLK;
+    std_cfg.gpio_cfg.bclk = HITONY_I2S_BCLK;
+    std_cfg.gpio_cfg.ws = HITONY_I2S_WS;
+    std_cfg.gpio_cfg.dout = HITONY_I2S_DOUT;
     std_cfg.gpio_cfg.din = I2S_GPIO_UNUSED;
     std_cfg.gpio_cfg.invert_flags.mclk_inv = false;
     std_cfg.gpio_cfg.invert_flags.bclk_inv = false;
     std_cfg.gpio_cfg.invert_flags.ws_inv = false;
 
     i2s_tdm_config_t tdm_cfg = {};
-    tdm_cfg.clk_cfg.sample_rate_hz = ECHOEAR_SAMPLE_RATE;
+    tdm_cfg.clk_cfg.sample_rate_hz = HITONY_SAMPLE_RATE;
     tdm_cfg.clk_cfg.clk_src = I2S_CLK_SRC_DEFAULT;
     tdm_cfg.clk_cfg.ext_clk_freq_hz = 0;
     tdm_cfg.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
@@ -118,11 +118,11 @@ bool AudioI2S::init() {
     tdm_cfg.slot_cfg.bit_order_lsb = false;
     tdm_cfg.slot_cfg.skip_mask = false;
     tdm_cfg.slot_cfg.total_slot = I2S_TDM_AUTO_SLOT_NUM;
-    tdm_cfg.gpio_cfg.mclk = ECHOEAR_I2S_MCLK;
-    tdm_cfg.gpio_cfg.bclk = ECHOEAR_I2S_BCLK;
-    tdm_cfg.gpio_cfg.ws = ECHOEAR_I2S_WS;
+    tdm_cfg.gpio_cfg.mclk = HITONY_I2S_MCLK;
+    tdm_cfg.gpio_cfg.bclk = HITONY_I2S_BCLK;
+    tdm_cfg.gpio_cfg.ws = HITONY_I2S_WS;
     tdm_cfg.gpio_cfg.dout = I2S_GPIO_UNUSED;
-    tdm_cfg.gpio_cfg.din = ECHOEAR_I2S_DIN;
+    tdm_cfg.gpio_cfg.din = HITONY_I2S_DIN;
     tdm_cfg.gpio_cfg.invert_flags.mclk_inv = false;
     tdm_cfg.gpio_cfg.invert_flags.bclk_inv = false;
     tdm_cfg.gpio_cfg.invert_flags.ws_inv = false;
@@ -141,7 +141,7 @@ bool AudioI2S::init() {
     const audio_codec_gpio_if_t* gpio_if = audio_codec_new_gpio();
 
     audio_codec_i2c_cfg_t i2c_cfg = {
-        .port = (i2c_port_t)ECHOEAR_I2C_PORT,
+        .port = (i2c_port_t)HITONY_I2C_PORT,
         .addr = ES8311_CODEC_DEFAULT_ADDR,
         .bus_handle = (i2c_master_bus_handle_t)i2c_bus_,
     };
@@ -151,7 +151,7 @@ bool AudioI2S::init() {
     es8311_cfg.ctrl_if = out_ctrl;
     es8311_cfg.gpio_if = gpio_if;
     es8311_cfg.codec_mode = ESP_CODEC_DEV_WORK_MODE_DAC;
-    es8311_cfg.pa_pin = ECHOEAR_CODEC_PA;
+    es8311_cfg.pa_pin = HITONY_CODEC_PA;
     es8311_cfg.use_mclk = true;
     es8311_cfg.hw_gain.pa_voltage = 5.0;
     es8311_cfg.hw_gain.codec_dac_voltage = 3.3;
@@ -190,7 +190,7 @@ bool AudioI2S::init() {
         .bits_per_sample = 16,
         .channel = 2,
         .channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0) | ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1),  // MIC1 + MIC2
-        .sample_rate = (uint32_t)ECHOEAR_SAMPLE_RATE,
+        .sample_rate = (uint32_t)HITONY_SAMPLE_RATE,
         .mclk_multiple = 0,
     };
     ESP_ERROR_CHECK(esp_codec_dev_open((esp_codec_dev_handle_t)input_dev_, &in_fs));
@@ -214,7 +214,7 @@ bool AudioI2S::init() {
         .bits_per_sample = 16,
         .channel = 1,
         .channel_mask = 0,
-        .sample_rate = (uint32_t)ECHOEAR_SAMPLE_RATE,
+        .sample_rate = (uint32_t)HITONY_SAMPLE_RATE,
         .mclk_multiple = 0,
     };
     ESP_ERROR_CHECK(esp_codec_dev_open((esp_codec_dev_handle_t)output_dev_, &out_fs));

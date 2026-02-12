@@ -41,7 +41,7 @@ esp_err_t wifi_provisioning_init(void);
 
 /**
  * @brief 启动AP模式配网
- * @param ap_ssid AP热点名称（如果为NULL，使用默认名称 "EchoEar-XXXX"）
+ * @param ap_ssid AP热点名称（如果为NULL，使用默认名称 "HiTony-XXXX"）
  * @param ap_password AP密码（如果为NULL，使用默认密码或开放模式）
  * @return ESP_OK on success
  */

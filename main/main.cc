@@ -1,6 +1,6 @@
 /**
  * @file main_new.cc
- * @brief EchoEar 智能音箱主程序 - 新架构
+ * @brief HiTony 智能音箱主程序 - 新架构
  *
  * 这是重构后的main.cc，采用双核任务分离架构
  * 使用时请将此文件重命名为main.cc替换旧版本
@@ -48,13 +48,13 @@ static void init_gpio() {
     gpio_config_t io_conf = {};
     io_conf.intr_type = GPIO_INTR_DISABLE;
     io_conf.mode = GPIO_MODE_OUTPUT;
-    io_conf.pin_bit_mask = (1ULL << ECHOEAR_LED_G);  // 只初始化绿色LED
+    io_conf.pin_bit_mask = (1ULL << HITONY_LED_G);  // 只初始化绿色LED
     io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
     io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
     gpio_config(&io_conf);
 
     // 关闭LED
-    gpio_set_level(ECHOEAR_LED_G, 0);
+    gpio_set_level(HITONY_LED_G, 0);
 
     ESP_LOGI(TAG, "GPIO initialized");
 }
@@ -97,7 +97,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
 }
 
 static void init_wifi_with_flag(bool force_provisioning) {
-#if ECHOEAR_USE_HARDCODED_WIFI
+#if HITONY_USE_HARDCODED_WIFI
     // ========================================================================
     // 硬编码WiFi模式（快速测试，节省RAM - 不启动AP/HTTP/DNS）
     // ========================================================================
@@ -134,10 +134,10 @@ static void init_wifi_with_flag(bool force_provisioning) {
                                                &wifi_event_handler, nullptr));
 
     // 配置WiFi连接
-    ESP_LOGI(TAG, "[6/6] Connecting to: %s", ECHOEAR_WIFI_SSID);
+    ESP_LOGI(TAG, "[6/6] Connecting to: %s", HITONY_WIFI_SSID);
     wifi_config_t wifi_config = {};
-    strcpy((char*)wifi_config.sta.ssid, ECHOEAR_WIFI_SSID);
-    strcpy((char*)wifi_config.sta.password, ECHOEAR_WIFI_PASSWORD);
+    strcpy((char*)wifi_config.sta.ssid, HITONY_WIFI_SSID);
+    strcpy((char*)wifi_config.sta.password, HITONY_WIFI_PASSWORD);
     wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA_WPA2_PSK;
     wifi_config.sta.pmf_cfg.capable = true;
     wifi_config.sta.pmf_cfg.required = false;
@@ -236,7 +236,7 @@ static void init_wifi_with_flag(bool force_provisioning) {
 extern "C" void app_main() {
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "╔═══════════════════════════════════════╗");
-    ESP_LOGI(TAG, "║  EchoEar Smart Speaker - NEW ARCH    ║");
+    ESP_LOGI(TAG, "║  HiTony Smart Speaker - NEW ARCH    ║");
     ESP_LOGI(TAG, "║  ESP32-S3 Dual Core Architecture     ║");
     ESP_LOGI(TAG, "║  Version: 2.0.0                      ║");
     ESP_LOGI(TAG, "╚═══════════════════════════════════════╝");
@@ -364,7 +364,7 @@ extern "C" void app_main() {
     ESP_LOGI(TAG, "[Phase 6] Starting system enhancements...");
 
     // 初始化并启动LED控制器
-    if (!LedController::instance().init(ECHOEAR_LED_G)) {
+    if (!LedController::instance().init(HITONY_LED_G)) {
         ESP_LOGW(TAG, "Failed to initialize LED controller");
     } else {
         if (!LedController::instance().start()) {
@@ -401,7 +401,7 @@ extern "C" void app_main() {
     ESP_LOGI(TAG, "- Free Heap: %lu bytes", esp_get_free_heap_size());
     ESP_LOGI(TAG, "- Free PSRAM: %lu bytes", heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     ESP_LOGI(TAG, "");
-    ESP_LOGI(TAG, "EchoEar is ready! 🎤");
+    ESP_LOGI(TAG, "HiTony is ready! 🎤");
     ESP_LOGI(TAG, "");
 
     // 主任务完成，删除自己

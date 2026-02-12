@@ -62,10 +62,10 @@ static void ws_recreate_client() {
     static char ws_headers[128];
     snprintf(ws_headers, sizeof(ws_headers),
              "x-device-id: %s\r\nx-device-token: %s\r\n",
-             ECHOEAR_DEVICE_ID, ECHOEAR_DEVICE_TOKEN);
+             HITONY_DEVICE_ID, HITONY_DEVICE_TOKEN);
 
     esp_websocket_client_config_t ws_cfg = {};
-    ws_cfg.uri = ECHOEAR_WS_URL;
+    ws_cfg.uri = HITONY_WS_URL;
     ws_cfg.headers = ws_headers;
     ws_cfg.task_stack = 4096;           // 4KB (瘦回调不做cJSON，足够)
     ws_cfg.buffer_size = 8192;          // 8KB接收缓冲（容纳多帧TTS数据）
@@ -87,7 +87,7 @@ static void ws_recreate_client() {
     esp_websocket_register_events(g_ws_client, WEBSOCKET_EVENT_ANY,
                                   websocket_event_handler, nullptr);
 
-    ESP_LOGI(TAG, "Reconnecting to %s", ECHOEAR_WS_URL);
+    ESP_LOGI(TAG, "Reconnecting to %s", HITONY_WS_URL);
     esp_err_t ret = esp_websocket_client_start(g_ws_client);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start WebSocket client: %d", ret);
@@ -148,7 +148,7 @@ static void ws_send_hello() {
     char buf[192];
     snprintf(buf, sizeof(buf),
              "{\"type\":\"hello\",\"device_id\":\"%s\",\"fw\":\"1.0.0\",\"listen_mode\":\"auto\"}",
-             ECHOEAR_DEVICE_ID);
+             HITONY_DEVICE_ID);
     ws_send_json(buf);
     ESP_LOGI(TAG, "Hello handshake sent, waiting for server response...");
 }
@@ -815,10 +815,10 @@ void main_control_task(void* arg) {
         static char ws_headers[128];
         snprintf(ws_headers, sizeof(ws_headers),
                  "x-device-id: %s\r\nx-device-token: %s\r\n",
-                 ECHOEAR_DEVICE_ID, ECHOEAR_DEVICE_TOKEN);
+                 HITONY_DEVICE_ID, HITONY_DEVICE_TOKEN);
 
         esp_websocket_client_config_t ws_cfg = {};
-        ws_cfg.uri = ECHOEAR_WS_URL;
+        ws_cfg.uri = HITONY_WS_URL;
         ws_cfg.headers = ws_headers;
         ws_cfg.task_stack = 4096;           // 4KB (瘦回调不做cJSON，足够)
         ws_cfg.buffer_size = 8192;          // 8KB接收缓冲（容纳多帧TTS数据）
@@ -838,7 +838,7 @@ void main_control_task(void* arg) {
             esp_websocket_register_events(g_ws_client, WEBSOCKET_EVENT_ANY,
                                           websocket_event_handler, nullptr);
 
-            ESP_LOGI(TAG, "Connecting to %s", ECHOEAR_WS_URL);
+            ESP_LOGI(TAG, "Connecting to %s", HITONY_WS_URL);
             esp_err_t ret = esp_websocket_client_start(g_ws_client);
             if (ret != ESP_OK) {
                 ESP_LOGW(TAG, "Failed to start WebSocket client: %d", ret);

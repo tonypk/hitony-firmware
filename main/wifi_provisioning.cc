@@ -29,7 +29,7 @@ static const char* TAG = "wifi_prov";
 #define NVS_KEY_CONFIGURED "configured"
 
 // AP配置
-#define DEFAULT_AP_SSID_PREFIX "EchoEar-"
+#define DEFAULT_AP_SSID_PREFIX "HiTony-"
 #define DEFAULT_AP_PASSWORD ""  // 开放模式，无密码
 #define AP_CHANNEL 1
 #define AP_MAX_CONNECTIONS 4
@@ -200,7 +200,7 @@ button:active{background:#0056b3}
 <body>
 <div class="box">
 <h1>WiFi Setup</h1>
-<p>Connect EchoEar to your WiFi network</p>
+<p>Connect HiTony to your WiFi network</p>
 
 <label>1. Select Network (or enter manually below):</label>
 <select id="net">
