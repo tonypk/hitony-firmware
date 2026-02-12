@@ -1,6 +1,7 @@
 #include "lvgl_ui.h"
 #include "config.h"
 #include "task_manager.h"
+#include "audio_i2s.h"
 
 #include <esp_log.h>
 #include <esp_lcd_panel_ops.h>
@@ -107,6 +108,30 @@ static uint32_t wake_trigger_count = 0;
 
 // Boot-time touch detection for provisioning trigger
 static bool g_boot_touch_detected = false;
+
+// --- Gesture detection ---
+static bool gesture_tracking = false;
+static bool gesture_consumed = false;  // Long press already handled
+static uint16_t gesture_start_x = 0;
+static uint16_t gesture_start_y = 0;
+static uint16_t gesture_last_x = 0;
+static uint16_t gesture_last_y = 0;
+static uint32_t gesture_start_tick = 0;
+#define GESTURE_MIN_DISTANCE  50   // Min pixels for swipe
+#define GESTURE_LONG_PRESS_MS 800  // Long press threshold
+
+enum GestureType {
+    GESTURE_NONE = 0,
+    GESTURE_TAP,
+    GESTURE_SWIPE_UP,
+    GESTURE_SWIPE_DOWN,
+    GESTURE_LONG_PRESS,
+};
+
+// --- Volume UI ---
+static lv_obj_t* vol_bar = nullptr;
+static lv_obj_t* vol_label = nullptr;
+static lv_timer_t* vol_hide_timer = nullptr;
 
 // LVGL互斥锁 - 防止多任务同时访问LVGL（LVGL不是线程安全的）
 static SemaphoreHandle_t s_lvgl_mutex = nullptr;
@@ -306,6 +331,67 @@ static void gaze_cb(lv_timer_t* t) {
     lv_timer_set_period(t, 2000 + (rand() % 3000));
 }
 
+// --- Volume UI helpers ---
+static void vol_hide_cb(lv_timer_t* t) {
+    (void)t;
+    if (vol_bar) lv_obj_add_flag(vol_bar, LV_OBJ_FLAG_HIDDEN);
+    if (vol_label) lv_obj_add_flag(vol_label, LV_OBJ_FLAG_HIDDEN);
+    if (vol_hide_timer) {
+        lv_timer_del(vol_hide_timer);
+        vol_hide_timer = nullptr;
+    }
+}
+
+static void show_volume_ui(int vol, bool muted) {
+    if (!vol_bar || !vol_label) return;
+
+    if (muted) {
+        lv_label_set_text(vol_label, LV_SYMBOL_MUTE);
+    } else {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%s %d%%", LV_SYMBOL_VOLUME_MAX, vol);
+        lv_label_set_text(vol_label, buf);
+    }
+    lv_bar_set_value(vol_bar, muted ? 0 : vol, LV_ANIM_ON);
+    lv_obj_clear_flag(vol_bar, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(vol_label, LV_OBJ_FLAG_HIDDEN);
+
+    // Auto-hide after 1.5s
+    if (vol_hide_timer) lv_timer_del(vol_hide_timer);
+    vol_hide_timer = lv_timer_create(vol_hide_cb, 1500, nullptr);
+    lv_timer_set_repeat_count(vol_hide_timer, 1);
+}
+
+static void handle_gesture(GestureType gesture) {
+    auto& audio = AudioI2S::instance();
+
+    switch (gesture) {
+        case GESTURE_SWIPE_UP: {
+            int vol = audio.get_volume() + 10;
+            if (vol > 100) vol = 100;
+            audio.set_volume(vol);
+            if (audio.is_muted()) audio.set_mute(false);
+            show_volume_ui(vol, false);
+            break;
+        }
+        case GESTURE_SWIPE_DOWN: {
+            int vol = audio.get_volume() - 10;
+            if (vol < 0) vol = 0;
+            audio.set_volume(vol);
+            show_volume_ui(vol, audio.is_muted());
+            break;
+        }
+        case GESTURE_LONG_PRESS: {
+            bool mute = !audio.is_muted();
+            audio.set_mute(mute);
+            show_volume_ui(audio.get_volume(), mute);
+            break;
+        }
+        default:
+            break;
+    }
+}
+
 static void touch_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
     (void)drv;
     if (!touch_handle) {
@@ -319,30 +405,68 @@ static void touch_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
     bool touched = esp_lcd_touch_get_coordinates(touch_handle, x, y, nullptr, &count, 1);
     if (touched && count > 0) {
         touch_count++;
-        g_boot_touch_detected = true;  // Set flag for boot-time provisioning trigger
-        ESP_LOGI(TAG, "🖐️ Touch detected: x=%u y=%u (count=%lu)", x[0], y[0], touch_count);
+        g_boot_touch_detected = true;
         data->state = LV_INDEV_STATE_PR;
         data->point.x = x[0];
         data->point.y = y[0];
 
-        ESP_LOGD(TAG, "Touch: x=%d y=%d #%lu", x[0], y[0], touch_count);
+        if (!gesture_tracking) {
+            // Start tracking new gesture
+            gesture_tracking = true;
+            gesture_consumed = false;
+            gesture_start_x = x[0];
+            gesture_start_y = y[0];
+            gesture_last_x = x[0];
+            gesture_last_y = y[0];
+            gesture_start_tick = xTaskGetTickCount();
+        } else {
+            // Update last known position
+            gesture_last_x = x[0];
+            gesture_last_y = y[0];
 
-        // 触摸唤醒：触发录音模式
-        static uint32_t last_touch_time = 0;
-        uint32_t now = xTaskGetTickCount();
+            if (!gesture_consumed) {
+                uint32_t held_ms = (xTaskGetTickCount() - gesture_start_tick) * portTICK_PERIOD_MS;
+                int dx = (int)gesture_last_x - (int)gesture_start_x;
+                int dy = (int)gesture_last_y - (int)gesture_start_y;
 
-        // 防抖：3秒冷却时间
-        if (now - last_touch_time > pdMS_TO_TICKS(3000)) {
-            wake_trigger_count++;
-            ESP_LOGI(TAG, "Touch wake! Triggering recording mode... (wake #%lu)", wake_trigger_count);
-
-            // 发送触摸唤醒事件（使用独立事件位，不受SPEAKING/MUSIC过滤）
-            xEventGroupSetBits(g_audio_event_bits, AUDIO_EVENT_TOUCH_WAKE);
-
-            last_touch_time = now;
+                // Check swipe during drag (responsive, don't wait for release)
+                if (abs(dy) > GESTURE_MIN_DISTANCE && abs(dy) > abs(dx)) {
+                    if (dy < 0) {
+                        ESP_LOGI(TAG, "Gesture: SWIPE_UP (dy=%d)", dy);
+                        handle_gesture(GESTURE_SWIPE_UP);
+                    } else {
+                        ESP_LOGI(TAG, "Gesture: SWIPE_DOWN (dy=%d)", dy);
+                        handle_gesture(GESTURE_SWIPE_DOWN);
+                    }
+                    gesture_consumed = true;
+                }
+                // Check long press (no significant movement)
+                else if (held_ms >= GESTURE_LONG_PRESS_MS &&
+                         (dx * dx + dy * dy) < (GESTURE_MIN_DISTANCE * GESTURE_MIN_DISTANCE)) {
+                    ESP_LOGI(TAG, "Gesture: LONG_PRESS (%lums)", held_ms);
+                    handle_gesture(GESTURE_LONG_PRESS);
+                    gesture_consumed = true;
+                }
+            }
         }
     } else {
         data->state = LV_INDEV_STATE_REL;
+
+        if (gesture_tracking) {
+            gesture_tracking = false;
+
+            if (!gesture_consumed) {
+                // Short tap without swipe → wake trigger with debounce
+                static uint32_t last_wake_time = 0;
+                uint32_t now = xTaskGetTickCount();
+                if (now - last_wake_time > pdMS_TO_TICKS(3000)) {
+                    wake_trigger_count++;
+                    ESP_LOGI(TAG, "Touch wake #%lu", wake_trigger_count);
+                    xEventGroupSetBits(g_audio_event_bits, AUDIO_EVENT_TOUCH_WAKE);
+                    last_wake_time = now;
+                }
+            }
+        }
     }
 }
 
@@ -668,8 +792,9 @@ static void init_display() {
         } else {
             int on_level = HITONY_BL_ACTIVE_LOW ? 0 : 1;
             ESP_LOGI(TAG, "Backlight pins: BL=%d BL_ALT=%d active_low=%d", bl, bl_alt, HITONY_BL_ACTIVE_LOW);
-            set_backlight_level(on_level);
-            ESP_LOGI(TAG, "Backlight set to ON (level=%d)", on_level);
+            // Backlight stays OFF here — turned on after first LVGL frame to avoid garbled screen
+            set_backlight_level(!on_level);  // OFF
+            ESP_LOGI(TAG, "Backlight OFF (deferred until first frame)");
         }
     }
 
@@ -776,12 +901,41 @@ void lvgl_ui_init() {
     lv_obj_add_event_cb(touch_layer, touch_event_cb, LV_EVENT_PRESSED, nullptr);
     lv_obj_add_event_cb(touch_layer, touch_event_cb, LV_EVENT_RELEASED, nullptr);
 
+    // --- Volume indicator (bottom center, hidden by default) ---
+    vol_bar = lv_bar_create(lv_scr_act());
+    lv_obj_set_size(vol_bar, 180, 8);
+    lv_obj_align(vol_bar, LV_ALIGN_BOTTOM_MID, 0, -48);
+    lv_bar_set_range(vol_bar, 0, 100);
+    lv_bar_set_value(vol_bar, 80, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(vol_bar, lv_color_hex(0x222222), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(vol_bar, LV_OPA_70, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(vol_bar, lv_color_hex(0x4FC3F7), LV_PART_INDICATOR);
+    lv_obj_set_style_radius(vol_bar, 4, LV_PART_MAIN);
+    lv_obj_set_style_radius(vol_bar, 4, LV_PART_INDICATOR);
+    lv_obj_clear_flag(vol_bar, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(vol_bar, LV_OBJ_FLAG_HIDDEN);
+
+    vol_label = lv_label_create(lv_scr_act());
+    lv_obj_set_style_text_color(vol_label, lv_color_hex(0xE0E0E0), 0);
+    lv_obj_set_style_text_font(vol_label, &lv_font_montserrat_20, 0);
+    lv_label_set_text(vol_label, "");
+    lv_obj_align(vol_label, LV_ALIGN_BOTTOM_MID, 0, -62);
+    lv_obj_clear_flag(vol_label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(vol_label, LV_OBJ_FLAG_HIDDEN);
+
     ESP_LOGI(TAG, "LVGL initialized");
     current_state = UI_STATE_BOOT;
     apply_state(nullptr);
 
     // Force one refresh（此时lvgl_task还未启动，安全调用）
     lv_timer_handler();
+
+    // Now turn on backlight — first frame is in LCD VRAM, no garbled screen
+    {
+        int on_level = HITONY_BL_ACTIVE_LOW ? 0 : 1;
+        set_backlight_level(on_level);
+        ESP_LOGI(TAG, "Backlight ON (after first frame)");
+    }
 
     // Start animated pupil movement and blinking
     gaze_timer = lv_timer_create(gaze_cb, 2000 + (rand() % 2000), nullptr);
@@ -1029,103 +1183,40 @@ void lvgl_ui_set_music_energy(float energy) {
     lvgl_unlock();
 }
 
-// === Device Binding Info Overlay ===
-static lv_obj_t* binding_overlay = nullptr;
+// === Device Binding Info (scrolling text at top, for provisioning mode) ===
+static lv_obj_t* binding_label = nullptr;
 
 void lvgl_ui_show_binding_info(const char* device_id, const char* token, const char* admin_url) {
     if (!lvgl_lock(100)) return;
 
-    if (binding_overlay) {
-        lv_obj_del(binding_overlay);
-        binding_overlay = nullptr;
+    if (binding_label) {
+        lv_obj_del(binding_label);
+        binding_label = nullptr;
     }
 
-    // Semi-transparent dark overlay covering the full screen
-    binding_overlay = lv_obj_create(lv_scr_act());
-    lv_obj_remove_style_all(binding_overlay);
-    lv_obj_set_size(binding_overlay, HITONY_DISPLAY_WIDTH, HITONY_DISPLAY_HEIGHT);
-    lv_obj_align(binding_overlay, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_bg_color(binding_overlay, lv_color_hex(0x111122), 0);
-    lv_obj_set_style_bg_opa(binding_overlay, LV_OPA_90, 0);
-    lv_obj_set_style_radius(binding_overlay, 180, 0);  // Round for circular display
-    lv_obj_set_style_border_width(binding_overlay, 0, 0);
-    lv_obj_clear_flag(binding_overlay, LV_OBJ_FLAG_SCROLLABLE);
+    // Single scrolling label at top
+    binding_label = lv_label_create(lv_scr_act());
+    lv_obj_set_style_text_color(binding_label, lv_color_hex(0x4FC3F7), 0);
+    lv_obj_set_style_text_font(binding_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_width(binding_label, 260);  // Constrain width for circular display
+    lv_label_set_long_mode(binding_label, LV_LABEL_LONG_SCROLL_CIRCULAR);
 
-    // Title
-    lv_obj_t* title = lv_label_create(binding_overlay);
-    lv_obj_set_style_text_color(title, lv_color_hex(0x4FC3F7), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
-    lv_label_set_text(title, "Device Binding");
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 60);
+    static char scroll_buf[256];
+    snprintf(scroll_buf, sizeof(scroll_buf),
+             "ID: %s   Token: %s   Bind: %s",
+             device_id, token, admin_url);
+    lv_label_set_text(binding_label, scroll_buf);
+    lv_obj_align(binding_label, LV_ALIGN_TOP_MID, 0, 30);
 
-    // Device ID
-    lv_obj_t* id_header = lv_label_create(binding_overlay);
-    lv_obj_set_style_text_color(id_header, lv_color_hex(0x888888), 0);
-    lv_obj_set_style_text_font(id_header, &lv_font_montserrat_14, 0);
-    lv_label_set_text(id_header, "Device ID:");
-    lv_obj_align(id_header, LV_ALIGN_TOP_MID, 0, 95);
-
-    lv_obj_t* id_val = lv_label_create(binding_overlay);
-    lv_obj_set_style_text_color(id_val, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(id_val, &lv_font_montserrat_14, 0);
-    lv_label_set_text(id_val, device_id);
-    lv_obj_align(id_val, LV_ALIGN_TOP_MID, 0, 112);
-
-    // Token
-    lv_obj_t* tok_header = lv_label_create(binding_overlay);
-    lv_obj_set_style_text_color(tok_header, lv_color_hex(0x888888), 0);
-    lv_obj_set_style_text_font(tok_header, &lv_font_montserrat_14, 0);
-    lv_label_set_text(tok_header, "Token:");
-    lv_obj_align(tok_header, LV_ALIGN_TOP_MID, 0, 142);
-
-    lv_obj_t* tok_val = lv_label_create(binding_overlay);
-    lv_obj_set_style_text_color(tok_val, lv_color_hex(0x00FF88), 0);
-    lv_obj_set_style_text_font(tok_val, &lv_font_montserrat_14, 0);
-    lv_label_set_text(tok_val, token);
-    lv_obj_align(tok_val, LV_ALIGN_TOP_MID, 0, 159);
-
-    // Separator line
-    lv_obj_t* sep = lv_obj_create(binding_overlay);
-    lv_obj_remove_style_all(sep);
-    lv_obj_set_size(sep, 200, 1);
-    lv_obj_set_style_bg_color(sep, lv_color_hex(0x333355), 0);
-    lv_obj_set_style_bg_opa(sep, LV_OPA_COVER, 0);
-    lv_obj_align(sep, LV_ALIGN_TOP_MID, 0, 190);
-
-    // Admin URL header
-    lv_obj_t* url_header = lv_label_create(binding_overlay);
-    lv_obj_set_style_text_color(url_header, lv_color_hex(0x888888), 0);
-    lv_obj_set_style_text_font(url_header, &lv_font_montserrat_14, 0);
-    lv_label_set_text(url_header, "Bind at:");
-    lv_obj_align(url_header, LV_ALIGN_TOP_MID, 0, 200);
-
-    // Admin URL (may be long, allow wrap)
-    lv_obj_t* url_val = lv_label_create(binding_overlay);
-    lv_obj_set_style_text_color(url_val, lv_color_hex(0x4FC3F7), 0);
-    lv_obj_set_style_text_font(url_val, &lv_font_montserrat_14, 0);
-    lv_obj_set_width(url_val, 240);
-    lv_label_set_long_mode(url_val, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_align(url_val, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(url_val, admin_url);
-    lv_obj_align(url_val, LV_ALIGN_TOP_MID, 0, 217);
-
-    // Hint at bottom
-    lv_obj_t* hint = lv_label_create(binding_overlay);
-    lv_obj_set_style_text_color(hint, lv_color_hex(0x666666), 0);
-    lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
-    lv_label_set_text(hint, "Auto-dismiss in 8s...");
-    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -65);
-
-    ESP_LOGI(TAG, "Binding info shown: ID=%s Token=%s URL=%s", device_id, token, admin_url);
+    ESP_LOGI(TAG, "Binding info (scroll): %s", scroll_buf);
     lvgl_unlock();
 }
 
 void lvgl_ui_hide_binding_info() {
     if (!lvgl_lock(100)) return;
-    if (binding_overlay) {
-        lv_obj_del(binding_overlay);
-        binding_overlay = nullptr;
-        ESP_LOGI(TAG, "Binding info hidden");
+    if (binding_label) {
+        lv_obj_del(binding_label);
+        binding_label = nullptr;
     }
     lvgl_unlock();
 }

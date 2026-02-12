@@ -17,6 +17,12 @@ public:
     void play_test_tone();
     void* i2c_bus() const { return i2c_bus_; }
 
+    // Volume control (0-100)
+    void set_volume(int vol);
+    int  get_volume() const { return volume_; }
+    void set_mute(bool mute);
+    bool is_muted() const { return muted_; }
+
 private:
     AudioI2S() = default;
     void* tx_chan_ = nullptr; // i2s_chan_handle_t
@@ -24,4 +30,6 @@ private:
     void* i2c_bus_ = nullptr; // i2c_master_bus_handle_t
     void* output_dev_ = nullptr; // esp_codec_dev_handle_t
     void* input_dev_ = nullptr;  // esp_codec_dev_handle_t
+    int volume_ = 80;    // Default 80%
+    bool muted_ = false;
 };

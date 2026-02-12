@@ -218,9 +218,9 @@ bool AudioI2S::init() {
         .mclk_multiple = 0,
     };
     ESP_ERROR_CHECK(esp_codec_dev_open((esp_codec_dev_handle_t)output_dev_, &out_fs));
-    // Ensure output is unmuted and loud enough
+    // Set initial volume
     esp_codec_dev_set_out_mute((esp_codec_dev_handle_t)output_dev_, false);
-    esp_codec_dev_set_out_vol((esp_codec_dev_handle_t)output_dev_, 100);
+    esp_codec_dev_set_out_vol((esp_codec_dev_handle_t)output_dev_, volume_);
 
     ESP_LOGI(TAG, "Codec initialized (ES7210 + ES8311)");
     return true;
@@ -244,4 +244,27 @@ int AudioI2S::play_frame(const uint8_t* buf, size_t len) {
         return -1;
     }
     return (int)len;
+}
+
+void AudioI2S::set_volume(int vol) {
+    if (vol < 0) vol = 0;
+    if (vol > 100) vol = 100;
+    volume_ = vol;
+    if (output_dev_ && !muted_) {
+        esp_codec_dev_set_out_vol((esp_codec_dev_handle_t)output_dev_, vol);
+    }
+    ESP_LOGI(TAG, "Volume: %d%%", vol);
+}
+
+void AudioI2S::set_mute(bool mute) {
+    muted_ = mute;
+    if (output_dev_) {
+        if (mute) {
+            esp_codec_dev_set_out_mute((esp_codec_dev_handle_t)output_dev_, true);
+        } else {
+            esp_codec_dev_set_out_mute((esp_codec_dev_handle_t)output_dev_, false);
+            esp_codec_dev_set_out_vol((esp_codec_dev_handle_t)output_dev_, volume_);
+        }
+    }
+    ESP_LOGI(TAG, "Mute: %s (vol=%d%%)", mute ? "ON" : "OFF", volume_);
 }
