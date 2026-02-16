@@ -1070,16 +1070,11 @@ void main_control_task(void* arg) {
 
         if (audio_bits & AUDIO_EVENT_WAKE_DETECTED) {
             xEventGroupClearBits(g_audio_event_bits, AUDIO_EVENT_WAKE_DETECTED);
-            // AEC未启用时，SPEAKING/MUSIC期间忽略语音唤醒词（扬声器回声会误触发WakeNet）
-            // TODO: AEC启用后可移除此过滤，实现全双工TTS打断
-            if (g_current_fsm_state != FSM_STATE_SPEAKING &&
-                g_current_fsm_state != FSM_STATE_MUSIC) {
-                fsm_event_msg_t wake_evt = {.event = FSM_EVENT_WAKE_DETECTED};
-                xQueueSend(g_fsm_event_queue, &wake_evt, 0);
-            } else {
-                ESP_LOGW(TAG, "Voice wake ignored during %s (no AEC, likely speaker echo)",
-                         g_current_fsm_state == FSM_STATE_MUSIC ? "MUSIC" : "SPEAKING");
-            }
+            // AEC已启用（MR格式），允许所有状态下的语音唤醒（实现barge-in打断）
+            ESP_LOGI(TAG, "Voice wake in state %d (barge-in enabled with AEC)",
+                     g_current_fsm_state);
+            fsm_event_msg_t wake_evt = {.event = FSM_EVENT_WAKE_DETECTED};
+            xQueueSend(g_fsm_event_queue, &wake_evt, 0);
         }
 
         // [S0-6] 触摸唤醒：即时反馈 + 状态感知行为

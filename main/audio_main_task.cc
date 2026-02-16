@@ -47,13 +47,13 @@ void audio_main_task(void* arg) {
     AdvancedAFE afe;
     AdvancedAFE::Config afe_cfg = {
         .sample_rate = HITONY_SAMPLE_RATE,
-        .channels = 2,           // 双麦克风
+        .channels = 1,           // 单麦克风（"MR"模式：1mic + 1ref，启用AEC）
         .frame_size = 256,       // 每通道256 samples（匹配feed调用的256）
-        .enable_aec = false,     // AEC禁用："MMR"格式导致AFE零输出（ESP-SR bug/限制），改用"MM"格式+WakeNet自身抗噪能力
+        .enable_aec = true,      // AEC启用：使用"MR"格式（单麦+参考信号），实现TTS/音乐播放时的语音打断
         .enable_ns = true,       // 启用降噪
         .enable_agc = false,     // 禁用AGC（避免与WakeNet冲突）
         .enable_vad = true,      // 启用VAD
-        .enable_wakenet = true,  // ✅ 启用WakeNet（使用xiaozhi方法）
+        .enable_wakenet = true,  // 启用WakeNet
         .agc_level = 3,
         .ns_level = 2,
         .wake_threshold = 0,
@@ -65,8 +65,15 @@ void audio_main_task(void* arg) {
         return;
     }
 
-    // 设置唤醒词回调（xiaozhi方式）
+    // AEC收敛冷却：播放开始后300ms内抑制唤醒检测（防止AEC未收敛时假触发）
+    static volatile uint32_t s_aec_convergence_until = 0;
+
+    // 设置唤醒词回调
     afe.on_wake_detected([](const char* wake_word) {
+        if (xTaskGetTickCount() < s_aec_convergence_until) {
+            ESP_LOGW(TAG, "Wake suppressed during AEC convergence (300ms cooldown)");
+            return;
+        }
         ESP_LOGI(TAG, "🎤🎤🎤 Wake word detected: %s", wake_word);
         xEventGroupSetBits(g_audio_event_bits, AUDIO_EVENT_WAKE_DETECTED);
     });
@@ -233,9 +240,10 @@ void audio_main_task(void* arg) {
         }
 
         if (n > 0) {
-            int samples = n / sizeof(int16_t);
+            int stereo_samples = n / sizeof(int16_t);  // I2S立体声总样本数
+            int mono_samples = stereo_samples / 2;      // 单声道样本数
             i2s_read_count++;
-            i2s_samples_total += samples;
+            i2s_samples_total += mono_samples;
 
             // === 计算原始I2S音频的RMS音量（诊断麦克风）===
             static uint32_t volume_check_count = 0;
@@ -245,34 +253,38 @@ void audio_main_task(void* arg) {
             // 每30秒打印一次原始音量（减少日志噪声）
             // PLAYING模式下跳过音量日志（会拾取TTS回声，不具参考价值）
             if (mode != AUDIO_MODE_PLAYING && volume_check_count - last_volume_print >= 930) {
-                // 计算 RMS 音量
+                // 计算 RMS 音量（只看MIC0）
                 int64_t sum_squares = 0;
-                for (int i = 0; i < samples; i++) {
-                    int32_t sample = i2s_buffer[i];
+                for (int i = 0; i < mono_samples; i++) {
+                    int32_t sample = i2s_buffer[i * 2];  // MIC0
                     sum_squares += (int64_t)sample * sample;
                 }
-                float rms = sqrtf((float)sum_squares / samples);
-                float volume_percent = (rms / 32768.0f) * 100.0f;  // 归一化到 0-100%
+                float rms = sqrtf((float)sum_squares / mono_samples);
+                float volume_percent = (rms / 32768.0f) * 100.0f;
 
-                ESP_LOGI(TAG, "🎤 原始I2S音量: RMS=%.1f (%.2f%%), samples=%d",
-                         rms, volume_percent, samples);
+                ESP_LOGI(TAG, "🎤 I2S MIC0 音量: RMS=%.1f (%.2f%%), samples=%d",
+                         rms, volume_percent, mono_samples);
                 last_volume_print = volume_check_count;
             }
 
-            // 写入RingBuffer（零拷贝）- 原始双声道数据
-            size_t written = ringbuffer_write(&g_pcm_ringbuffer, i2s_buffer, samples);
+            // 从立体声I2S数据提取MIC0单声道，写入RingBuffer
+            int16_t mono_buffer[256];
+            for (int i = 0; i < mono_samples && i < 256; i++) {
+                mono_buffer[i] = i2s_buffer[i * 2];  // 取MIC0（偶数索引）
+            }
+            size_t written = ringbuffer_write(&g_pcm_ringbuffer, mono_buffer, mono_samples);
 
             // 前3次写入打印详细信息
             static int write_count = 0;
             if (write_count < 3) {
                 size_t rb_available = ringbuffer_data_available(&g_pcm_ringbuffer);
-                ESP_LOGI(TAG, "RingBuffer write #%d: samples=%d, written=%zu, avail=%zu",
-                         write_count, samples, written, rb_available);
+                ESP_LOGI(TAG, "RingBuffer write #%d: mono_samples=%d, written=%zu, avail=%zu",
+                         write_count, mono_samples, written, rb_available);
                 write_count++;
             }
 
-            if (written < samples) {
-                ESP_LOGW(TAG, "RingBuffer full, dropped %zu samples", samples - written);
+            if (written < (size_t)mono_samples) {
+                ESP_LOGW(TAG, "RingBuffer full, dropped %zu samples", mono_samples - written);
             }
         } else if (n < 0) {
             static int error_count = 0;
@@ -308,11 +320,14 @@ void audio_main_task(void* arg) {
                     break;
 
                 case AUDIO_CMD_START_PLAYBACK:
-                    ESP_LOGI(TAG, "Start playback mode");
+                    ESP_LOGI(TAG, "Start playback mode (AEC: %s)", afe_cfg.enable_aec ? "ON" : "OFF");
                     mode = AUDIO_MODE_PLAYING;
                     tts_play_count = 0;
                     tts_underrun_count = 0;
-                    if (afe_cfg.enable_aec) afe.enable_aec(true);  // 播放时启用AEC
+                    if (afe_cfg.enable_aec) {
+                        afe.enable_aec(true);  // 播放时启用AEC
+                        s_aec_convergence_until = xTaskGetTickCount() + pdMS_TO_TICKS(300);
+                    }
                     break;
 
                 case AUDIO_CMD_STOP_PLAYBACK:
@@ -333,11 +348,11 @@ void audio_main_task(void* arg) {
         // 前2次检查打印RingBuffer状态
         static int check_count = 0;
         if (check_count < 2) {
-            ESP_LOGI(TAG, "RingBuffer check #%d: available=%zu (need>=512)", check_count, available);
+            ESP_LOGI(TAG, "RingBuffer check #%d: available=%zu (need>=256)", check_count, available);
             check_count++;
         }
 
-        if (available >= 512) {  // AFE处理块大小（512个int16 = 256 samples × 2 mic channels）
+        if (available >= 256) {  // AFE处理块大小（256个int16 = 256 samples 单声道）
             // 首次进入AFE处理时打印
             static bool first_afe_process = true;
             if (first_afe_process) {
@@ -346,9 +361,9 @@ void audio_main_task(void* arg) {
             }
 
             if (afe_cfg.enable_aec) {
-                // AEC模式：3通道交织 [M0, M1, Ref]
-                int16_t mic_input[512];    // 2ch mic 数据
-                ringbuffer_read(&g_pcm_ringbuffer, mic_input, 512);
+                // AEC "MR"模式：2通道交织 [M, R, M, R, ...]
+                int16_t mic_input[256];    // 单声道mic数据
+                ringbuffer_read(&g_pcm_ringbuffer, mic_input, 256);
 
                 // 获取参考音频（播放中=实际PCM，空闲=零）
                 int16_t ref_input[256];
@@ -359,19 +374,18 @@ void audio_main_task(void* arg) {
                     memset(ref_input, 0, sizeof(ref_input));
                 }
 
-                // 交织为 [M0, M1, Ref, M0, M1, Ref, ...] (3ch)
-                int16_t afe_input[768];
+                // 交织为 [M, R, M, R, ...] (2ch) — "MR"格式
+                int16_t afe_input[512];
                 for (int i = 0; i < 256; i++) {
-                    afe_input[i * 3]     = mic_input[i * 2];      // Mic 0
-                    afe_input[i * 3 + 1] = mic_input[i * 2 + 1];  // Mic 1
-                    afe_input[i * 3 + 2] = ref_input[i];           // Reference
+                    afe_input[i * 2]     = mic_input[i];    // Mic 0
+                    afe_input[i * 2 + 1] = ref_input[i];    // Reference
                 }
 
                 afe.feed(afe_input, 256);
             } else {
-                // 无AEC模式：2通道直接喂入
-                int16_t afe_input[512];
-                ringbuffer_read(&g_pcm_ringbuffer, afe_input, 512);
+                // 无AEC模式：单声道直接喂入
+                int16_t afe_input[256];
+                ringbuffer_read(&g_pcm_ringbuffer, afe_input, 256);
                 afe.feed(afe_input, 256);
             }
         }
@@ -425,13 +439,13 @@ void audio_main_task(void* arg) {
         // === 4.2. VAD静音检测（仅RECORDING模式）===
             // WakeNet负责唤醒词检测（通过AFE回调），VAD仅用于录音结束判断
                 if (!afe.is_voice_active()) {
-                    // RECORDING模式下：静音2秒后自动停止录音
+                    // RECORDING模式下：静音1秒后自动停止录音
                     if (mode == AUDIO_MODE_RECORDING) {
                         uint32_t now = xTaskGetTickCount();
 
                         if (silence_start_time == 0) {
                             silence_start_time = now;
-                        } else if (now - silence_start_time > pdMS_TO_TICKS(2000)) {
+                        } else if (now - silence_start_time > pdMS_TO_TICKS(1000)) {
                             // 短录音优化：<500ms录音可能是auto-listen后无人说话，直接回IDLE
                             uint32_t recording_duration_ms = (now - recording_start_time) * portTICK_PERIOD_MS;
                             if (recording_duration_ms < 500) {
@@ -446,7 +460,7 @@ void audio_main_task(void* arg) {
                                 // 通知main task但用专门的bit表示"短录音取消"
                                 xEventGroupSetBits(g_audio_event_bits, AUDIO_EVENT_VAD_END);
                             } else {
-                                ESP_LOGI(TAG, "静音2秒，entering THINKING mode (recorded %lums)", recording_duration_ms);
+                                ESP_LOGI(TAG, "静音1秒，entering THINKING mode (recorded %lums)", recording_duration_ms);
                                 mode = AUDIO_MODE_THINKING;
                                 thinking_start_time = xTaskGetTickCount();
                                 afe_accum_count = 0;

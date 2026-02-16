@@ -98,9 +98,9 @@ bool AdvancedAFE::init(const Config& config) {
     // AEC配置
     if (config_.enable_aec) {
         afe_config->aec_init = true;
-        afe_config->aec_mode = AEC_MODE_SR_HIGH_PERF;  // 与xiaozhi一致：HIGH_PERF正确处理零参考
+        afe_config->aec_mode = AEC_MODE_SR_LOW_COST;  // LOW_COST使用esp_aec3_728（ESP32-S3优化版），更稳定
         afe_config->aec_filter_length = 4;              // ESP32-S3推荐值
-        ESP_LOGI(TAG, "AEC enabled: mode=SR_HIGH_PERF, filter_length=4");
+        ESP_LOGI(TAG, "AEC enabled: mode=SR_LOW_COST, filter_length=4");
     } else {
         afe_config->aec_init = false;
     }
@@ -134,13 +134,9 @@ bool AdvancedAFE::init(const Config& config) {
         }
     }
 
-    // BSS波束形成：AEC模式下启用（让afe_config_init决定），非AEC模式下禁用（间距太小）
-    if (!config_.enable_aec) {
-        afe_config->se_init = false;
-        ESP_LOGI(TAG, "BSS beamforming DISABLED (no AEC, microphone spacing too small)");
-    } else {
-        ESP_LOGI(TAG, "BSS beamforming: %s (afe_config_init default)", afe_config->se_init ? "ON" : "OFF");
-    }
+    // BSS波束形成：强制禁用（单麦不需要，双麦间距也太小）
+    afe_config->se_init = false;
+    ESP_LOGI(TAG, "BSS beamforming DISABLED (single mic MR mode)");
 
     // 内存分配模式：优先使用PSRAM
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
@@ -413,6 +409,22 @@ void AdvancedAFE::process_loop() {
                 if (res && res->data) {
                     // 计算样本数（单声道）
                     int samples = res->data_size / sizeof(int16_t);
+
+                    // AEC零输出检测：如果连续100帧全零，自动禁用AEC（防止MR格式bug）
+                    static uint32_t consecutive_zero_frames = 0;
+                    bool all_zero = true;
+                    int16_t* pcm = (int16_t*)res->data;
+                    for (int i = 0; i < samples && all_zero; i++) {
+                        if (pcm[i] != 0) all_zero = false;
+                    }
+                    if (all_zero) {
+                        if (++consecutive_zero_frames == 100) {
+                            ESP_LOGE(TAG, "❌ AEC FAILURE: 100 consecutive zero-output frames! Disabling AEC as fallback");
+                            afe_handle_->disable_aec(afe_data_);
+                        }
+                    } else {
+                        consecutive_zero_frames = 0;
+                    }
 
                     // 分配音频消息
                     audio_data_msg_t* msg = alloc_audio_msg(samples, 1);
