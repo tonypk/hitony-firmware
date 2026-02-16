@@ -1244,10 +1244,9 @@ static void expr_revert_cb(lv_timer_t* t) {
     (void)t;
     // Revert to state-based expression
     animate_to_expression(current_base_expr, 300);
-    if (expr_revert_timer) {
-        lv_timer_del(expr_revert_timer);
-        expr_revert_timer = nullptr;
-    }
+    // Timer has repeat_count=1, LVGL auto-deletes it after this callback returns.
+    // Do NOT call lv_timer_del() here — that would double-free.
+    expr_revert_timer = nullptr;
     ESP_LOGI(TAG, "Expression reverted to base");
 }
 
