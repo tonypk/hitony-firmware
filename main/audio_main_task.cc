@@ -569,9 +569,11 @@ void audio_main_task(void* arg) {
             pool_print_stats();
         }
 
-        // Yield 1ms（给AFE任务和其他任务运行时间）
-        // 注：AFE Ringbuffer溢出警告是正常现象，不影响功能
-        vTaskDelay(pdMS_TO_TICKS(1));
+        // Yield to other tasks. During PLAYING mode, the 60ms DMA write
+        // already yields CPU; skip the extra delay to reduce playback jitter.
+        if (mode != AUDIO_MODE_PLAYING) {
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
     }
 
     // 清理（通常不会到达这里）

@@ -405,6 +405,14 @@ static void handle_ws_disconnected() {
     // 停止音乐动画并隐藏耳机图标
     lvgl_ui_set_music_energy(0.0f);
 
+    // During OTA: WS was intentionally closed to free WiFi buffers.
+    // Don't trigger reconnect — device will reboot after OTA completes.
+    if (ota_is_running()) {
+        ESP_LOGI(TAG, "WS closed during OTA — suppressing reconnect");
+        lvgl_ui_set_status("OTA updating...");
+        return;
+    }
+
     lvgl_ui_set_status("Server lost");
 
     fsm_event_msg_t disc_evt = {.event = FSM_EVENT_WS_DISCONNECTED};
@@ -1334,8 +1342,9 @@ void main_control_task(void* arg) {
                     lvgl_ui_set_pupil_offset(x_offset, 0);
                 }
 
-                // Safety net: detect WS disconnect in IDLE (e.g. OTA close event missed)
-                if (!g_ws_connected && g_hello_acked) {
+                // Safety net: detect WS disconnect in IDLE (e.g. close event missed)
+                // Skip during OTA — WS was intentionally closed
+                if (!g_ws_connected && g_hello_acked && !ota_is_running()) {
                     ESP_LOGW(TAG, "IDLE but WS disconnected — forcing ERROR state for reconnect");
                     g_hello_acked = false;
                     g_session_id[0] = '\0';
