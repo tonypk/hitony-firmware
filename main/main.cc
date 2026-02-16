@@ -236,9 +236,9 @@ static void init_wifi_with_flag(bool force_provisioning) {
 extern "C" void app_main() {
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "╔═══════════════════════════════════════╗");
-    ESP_LOGI(TAG, "║  HiTony Smart Speaker - NEW ARCH    ║");
+    ESP_LOGI(TAG, "║  HiTony Smart Speaker                ║");
     ESP_LOGI(TAG, "║  ESP32-S3 Dual Core Architecture     ║");
-    ESP_LOGI(TAG, "║  Version: 2.0.0                      ║");
+    ESP_LOGI(TAG, "║  Firmware: %-26s ║", HITONY_FW_VERSION);
     ESP_LOGI(TAG, "╚═══════════════════════════════════════╝");
     ESP_LOGI(TAG, "");
 

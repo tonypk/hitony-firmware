@@ -2,7 +2,8 @@
 #include "led_controller.h"
 #include "system_monitor.h"
 #include "lvgl_ui.h"
-#include "config.h">
+#include "config.h"
+#include "ota_update.h"
 #include <esp_log.h>
 #include <esp_websocket_client.h>
 #include <cJSON.h>
@@ -166,10 +167,10 @@ static bool ws_send_type(const char* type) {
 static void ws_send_hello() {
     char buf[192];
     snprintf(buf, sizeof(buf),
-             "{\"type\":\"hello\",\"device_id\":\"%s\",\"fw\":\"1.0.0\",\"listen_mode\":\"auto\"}",
-             g_device_id);
+             "{\"type\":\"hello\",\"device_id\":\"%s\",\"fw\":\"%s\",\"listen_mode\":\"auto\"}",
+             g_device_id, HITONY_FW_VERSION);
     ws_send_json(buf);
-    ESP_LOGI(TAG, "Hello handshake sent, waiting for server response...");
+    ESP_LOGI(TAG, "Hello sent (fw=%s), waiting for server response...", HITONY_FW_VERSION);
 }
 
 /**
@@ -614,6 +615,20 @@ static void handle_ws_text(const char* data, uint16_t len) {
 
     } else if (strcmp(type->valuestring, "pong") == 0) {
         ESP_LOGD(TAG, "Server pong");
+
+    } else if (strcmp(type->valuestring, "ota_notify") == 0) {
+        cJSON* version = cJSON_GetObjectItem(root, "version");
+        cJSON* url = cJSON_GetObjectItem(root, "url");
+        if (cJSON_IsString(version) && cJSON_IsString(url)) {
+            ESP_LOGI(TAG, "OTA available: version=%s url=%s", version->valuestring, url->valuestring);
+            if (strcmp(version->valuestring, HITONY_FW_VERSION) != 0) {
+                if (!ota_is_running()) {
+                    ota_start_update(url->valuestring);
+                }
+            } else {
+                ESP_LOGI(TAG, "OTA: already on version %s, skipping", HITONY_FW_VERSION);
+            }
+        }
     }
 
     cJSON_Delete(root);
