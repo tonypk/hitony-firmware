@@ -265,19 +265,11 @@ static void apply_state(void* arg) {
         state_timer = nullptr;
     }
 
-    // --- Status text: visible during boot only, hidden after connected ---
+    // --- Status text: always visible for debugging ---
     if (status_label) {
-        bool is_boot_phase = (current_state == UI_STATE_BOOT ||
-                              current_state == UI_STATE_PROVISIONING ||
-                              current_state == UI_STATE_WIFI_CONNECTING ||
-                              current_state == UI_STATE_WIFI_CONNECTED);
-        if (is_boot_phase) {
-            lv_label_set_text(status_label, state_text(current_state));
-            lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 35);
-            lv_obj_clear_flag(status_label, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
-        }
+        lv_label_set_text(status_label, state_text(current_state));
+        lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 35);
+        lv_obj_clear_flag(status_label, LV_OBJ_FLAG_HIDDEN);
     }
 
     // --- Nomi eye state mapping ---
@@ -1040,10 +1032,9 @@ void lvgl_ui_init_touch(void* i2c_bus_handle) {
 
 void lvgl_ui_set_status(const char* text) {
     if (status_label && lvgl_lock(50)) {
-        if (!lv_obj_has_flag(status_label, LV_OBJ_FLAG_HIDDEN)) {
-            lv_label_set_text(status_label, text);
-            lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 35);
-        }
+        lv_label_set_text(status_label, text);
+        lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 35);
+        lv_obj_clear_flag(status_label, LV_OBJ_FLAG_HIDDEN);
         lvgl_unlock();
     }
 }
