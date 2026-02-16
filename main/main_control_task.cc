@@ -514,6 +514,20 @@ static void handle_ws_text(const char* data, uint16_t len) {
         g_tts_drop_count = 0;
         g_music_was_playing = false;
 
+        // Flush stale FSM events (e.g. TTS_END from hint TTS sent before music_start).
+        // Without this, the hint's tts_end event would be processed after we enter MUSIC
+        // state, causing g_tts_end_received=true and premature music stop.
+        {
+            fsm_event_msg_t stale_evt;
+            int flushed = 0;
+            while (xQueueReceive(g_fsm_event_queue, &stale_evt, 0) == pdTRUE) {
+                flushed++;
+            }
+            if (flushed > 0) {
+                ESP_LOGW(TAG, "music_start: flushed %d stale FSM events", flushed);
+            }
+        }
+
         if (prev_state == FSM_STATE_RECORDING) {
             audio_cmd_t cmd_rec = AUDIO_CMD_STOP_RECORDING;
             xQueueSend(g_audio_cmd_queue, &cmd_rec, 0);
@@ -549,6 +563,12 @@ static void handle_ws_text(const char* data, uint16_t len) {
             g_tts_end_received = false;
             g_drain_wait_count = 0;
             g_music_was_playing = false;
+
+            // Flush stale FSM events (TTS_END from voice interaction reply)
+            {
+                fsm_event_msg_t stale_evt;
+                while (xQueueReceive(g_fsm_event_queue, &stale_evt, 0) == pdTRUE) {}
+            }
 
             audio_cmd_t cmd_play = AUDIO_CMD_START_PLAYBACK;
             xQueueSend(g_audio_cmd_queue, &cmd_play, 0);
