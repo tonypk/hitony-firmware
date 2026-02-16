@@ -2,6 +2,7 @@
 #include "config.h"
 #include "task_manager.h"
 #include "audio_i2s.h"
+#include "wifi_provisioning.h"
 
 #include <esp_log.h>
 #include <esp_lcd_panel_ops.h>
@@ -468,6 +469,38 @@ static void create_settings_screen() {
     lv_obj_set_style_text_font(fw_lbl, &lv_font_montserrat_14, 0);
     lv_label_set_text(fw_lbl, "Firmware: v" HITONY_FW_VERSION);
     lv_obj_align(fw_lbl, LV_ALIGN_TOP_MID, 0, 225);
+
+    // --- WiFi Reset button ---
+    lv_obj_t* wifi_btn = lv_btn_create(settings_screen);
+    lv_obj_set_size(wifi_btn, 180, 40);
+    lv_obj_align(wifi_btn, LV_ALIGN_TOP_MID, 0, 260);
+    lv_obj_set_style_bg_color(wifi_btn, lv_color_hex(0x333333), 0);
+    lv_obj_set_style_bg_color(wifi_btn, lv_color_hex(0x555555), LV_STATE_PRESSED);
+    lv_obj_set_style_radius(wifi_btn, 20, 0);
+    lv_obj_set_style_border_color(wifi_btn, lv_color_hex(0x4FC3F7), 0);
+    lv_obj_set_style_border_width(wifi_btn, 1, 0);
+
+    lv_obj_t* wifi_lbl = lv_label_create(wifi_btn);
+    lv_obj_set_style_text_color(wifi_lbl, lv_color_hex(0x4FC3F7), 0);
+    lv_obj_set_style_text_font(wifi_lbl, &lv_font_montserrat_14, 0);
+    lv_label_set_text(wifi_lbl, LV_SYMBOL_WIFI " Reset WiFi");
+    lv_obj_center(wifi_lbl);
+
+    lv_obj_add_event_cb(wifi_btn, [](lv_event_t* e) {
+        (void)e;
+        ESP_LOGW("lvgl_ui", "WiFi reset requested from settings");
+        wifi_provisioning_clear_config();
+        // Show feedback then reboot
+        lvgl_ui_set_status("WiFi reset...");
+        // Delay reboot to show message
+        esp_timer_handle_t reboot_timer;
+        esp_timer_create_args_t timer_args = {
+            .callback = [](void*) { esp_restart(); },
+            .name = "reboot"
+        };
+        esp_timer_create(&timer_args, &reboot_timer);
+        esp_timer_start_once(reboot_timer, 1500000);  // 1.5s
+    }, LV_EVENT_CLICKED, NULL);
 
     // --- Back hint ---
     lv_obj_t* back_hint = lv_label_create(settings_screen);
