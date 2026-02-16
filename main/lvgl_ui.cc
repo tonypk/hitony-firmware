@@ -75,6 +75,14 @@ enum NomiExprId {
     EXPR_LOOK_RIGHT,
     EXPR_LOOK_UP,
     EXPR_ERROR,
+    // Rich expressions (server-driven via "expression" message)
+    EXPR_SURPRISED,   // Wide round eyes (shock/amazement)
+    EXPR_CONFUSED,    // Asymmetric — one eye squinting
+    EXPR_SAD,         // Droopy, narrowed eyes
+    EXPR_ANGRY,       // Very narrow, lowered eyes
+    EXPR_LOVE,        // Super squinty happy (adoring)
+    EXPR_SHY,         // Looking down, narrow
+    EXPR_WINK,        // Left eye normal, right eye blink
     EXPR_COUNT,
 };
 
@@ -90,6 +98,14 @@ static const NomiExpression NOMI_EXPRESSIONS[EXPR_COUNT] = {
     [EXPR_LOOK_RIGHT] = {{ -42,   0,  72,  52,  20 }, {  68,   0,  72,  52,  20 }},
     [EXPR_LOOK_UP]    = {{ -55, -10,  72,  52,  20 }, {  55, -10,  72,  52,  20 }},
     [EXPR_ERROR]      = {{ -55,   0,  52,  52,  26 }, {  55,   0,  52,  52,  26 }},
+    // Rich expressions
+    [EXPR_SURPRISED]  = {{ -55,  -5,  60,  68,  30 }, {  55,  -5,  60,  68,  30 }},  // Wide round "O" eyes
+    [EXPR_CONFUSED]   = {{ -55,   0,  72,  52,  20 }, {  55,   5,  72,  20,  10 }},  // Left normal, right squint
+    [EXPR_SAD]        = {{ -55,   8,  68,  32,  14 }, {  55,   8,  68,  32,  14 }},  // Droopy narrow
+    [EXPR_ANGRY]      = {{ -50,   4,  72,  24,  10 }, {  50,   4,  72,  24,  10 }},  // Narrow slits, closer together
+    [EXPR_LOVE]       = {{ -55,   6,  72,  14,   7 }, {  55,   6,  72,  14,   7 }},  // Ultra squinty (adoring)
+    [EXPR_SHY]        = {{ -55,  12,  64,  28,  12 }, {  55,  12,  64,  28,  12 }},  // Looking down, small
+    [EXPR_WINK]       = {{ -55,   0,  72,  52,  20 }, {  55,   0,  72,   6,   3 }},  // Left open, right closed
 };
 
 // Current animated state (tracks where each eye is right now)
@@ -1227,6 +1243,58 @@ void lvgl_ui_set_music_energy(float energy) {
     }
 
     last_music_energy = energy;
+    lvgl_unlock();
+}
+
+// === Named Expression System (server-driven) ===
+static lv_timer_t* expr_revert_timer = nullptr;
+
+static void expr_revert_cb(lv_timer_t* t) {
+    (void)t;
+    // Revert to state-based expression
+    animate_to_expression(current_base_expr, 300);
+    if (expr_revert_timer) {
+        lv_timer_del(expr_revert_timer);
+        expr_revert_timer = nullptr;
+    }
+    ESP_LOGI(TAG, "Expression reverted to base");
+}
+
+static NomiExprId name_to_expr(const char* name) {
+    if (!name) return EXPR_NORMAL;
+    if (strcmp(name, "happy") == 0)     return EXPR_HAPPY;
+    if (strcmp(name, "sad") == 0)       return EXPR_SAD;
+    if (strcmp(name, "angry") == 0)     return EXPR_ANGRY;
+    if (strcmp(name, "surprised") == 0) return EXPR_SURPRISED;
+    if (strcmp(name, "confused") == 0)  return EXPR_CONFUSED;
+    if (strcmp(name, "thinking") == 0)  return EXPR_LOOK_UP;
+    if (strcmp(name, "love") == 0)      return EXPR_LOVE;
+    if (strcmp(name, "shy") == 0)       return EXPR_SHY;
+    if (strcmp(name, "wink") == 0)      return EXPR_WINK;
+    if (strcmp(name, "wide") == 0)      return EXPR_WIDE;
+    if (strcmp(name, "neutral") == 0)   return EXPR_NORMAL;
+    return EXPR_NORMAL;
+}
+
+void lvgl_ui_show_expression(const char* name, uint32_t duration_ms) {
+    if (!name || !name[0]) return;
+    if (!lvgl_lock(100)) return;
+
+    NomiExprId expr = name_to_expr(name);
+    ESP_LOGI(TAG, "Expression: '%s' -> %d (duration=%lums)", name, expr, (unsigned long)duration_ms);
+
+    animate_to_expression(expr, 200);
+
+    // Set auto-revert timer
+    if (expr_revert_timer) {
+        lv_timer_del(expr_revert_timer);
+        expr_revert_timer = nullptr;
+    }
+    if (duration_ms > 0) {
+        expr_revert_timer = lv_timer_create(expr_revert_cb, duration_ms, nullptr);
+        lv_timer_set_repeat_count(expr_revert_timer, 1);
+    }
+
     lvgl_unlock();
 }
 

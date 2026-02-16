@@ -579,6 +579,19 @@ static void handle_ws_text(const char* data, uint16_t len) {
             ESP_LOGW(TAG, "Server error during thinking, resetting to IDLE");
         }
 
+    } else if (strcmp(type->valuestring, "expression") == 0) {
+        cJSON* expr_item = cJSON_GetObjectItem(root, "expr");
+        if (cJSON_IsString(expr_item)) {
+            // Default 3 seconds, server can override with "duration_ms"
+            uint32_t dur = 3000;
+            cJSON* dur_item = cJSON_GetObjectItem(root, "duration_ms");
+            if (cJSON_IsNumber(dur_item) && dur_item->valueint > 0) {
+                dur = (uint32_t)dur_item->valueint;
+            }
+            ESP_LOGI(TAG, "Server expression: %s (%lums)", expr_item->valuestring, (unsigned long)dur);
+            lvgl_ui_show_expression(expr_item->valuestring, dur);
+        }
+
     } else if (strcmp(type->valuestring, "pong") == 0) {
         ESP_LOGD(TAG, "Server pong");
     }

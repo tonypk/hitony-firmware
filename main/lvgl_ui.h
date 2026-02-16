@@ -23,6 +23,9 @@ typedef enum {
     UI_EXPR_PRAY,
 } ui_expression_t;
 
+// Named expression system (server sends string name, firmware maps to eye shape)
+void lvgl_ui_show_expression(const char* name, uint32_t duration_ms);  // Show named expression with auto-revert
+
 void lvgl_ui_init();
 void lvgl_ui_init_touch(void* i2c_bus_handle);
 void lvgl_ui_set_status(const char* text);
