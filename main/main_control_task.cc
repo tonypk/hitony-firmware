@@ -25,9 +25,10 @@ typedef enum {
 // 当前FSM状态（非static，WebSocket事件处理器需要访问作为状态守卫）
 fsm_state_t g_current_fsm_state = FSM_STATE_IDLE;
 
-// WebSocket客户端句柄和连接状态（静态变量）
-static esp_websocket_client_handle_t g_ws_client = nullptr;
-bool g_ws_connected = false;  // 非static，允许audio_main_task访问
+// WebSocket客户端句柄和连接状态
+// g_ws_client 非static：OTA模块需要在下载前关闭WS释放WiFi buffer
+esp_websocket_client_handle_t g_ws_client = nullptr;
+bool g_ws_connected = false;  // 非static，允许audio_main_task和OTA访问
 static bool g_audio_start_sent = false;  // 追踪audio_start/listen(start)是否成功发送
 static bool g_tts_end_received = false;  // 追踪tts_end是否已收到（等待队列排空）
 static uint32_t g_speaking_start_time = 0;  // SPEAKING模式进入时间（用于超时检测）

@@ -102,7 +102,7 @@
 #define HITONY_LED_G GPIO_NUM_43  // Green LED for status indication
 
 // Firmware version (semantic versioning)
-#define HITONY_FW_VERSION "2.1.0"
+#define HITONY_FW_VERSION "2.1.3"
 
 // OTA update server URL (HTTP, not HTTPS — ESP32-S3 with limited RAM)
 #define HITONY_OTA_URL "http://136.111.249.161/api/ota/firmware"

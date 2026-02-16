@@ -10,10 +10,16 @@
 #include <esp_log.h>
 #include <esp_ota_ops.h>
 #include <esp_http_client.h>
+#include <esp_websocket_client.h>
 #include <esp_system.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <string.h>
+
+// External WebSocket client from main_control_task — stop before OTA download
+// to free WiFi buffers (ESP32 minimal config can't handle concurrent connections)
+extern esp_websocket_client_handle_t g_ws_client;
+extern bool g_ws_connected;
 
 static const char* TAG = "ota";
 
@@ -21,12 +27,22 @@ static bool s_ota_running = false;
 static char s_ota_url[256] = {0};
 
 // Download buffer — allocated in PSRAM
-#define OTA_BUF_SIZE 4096
+#define OTA_BUF_SIZE 8192
 
 
 static void ota_task(void* arg) {
     ESP_LOGI(TAG, "OTA update starting: %s", s_ota_url);
     lvgl_ui_set_status("OTA updating...");
+
+    // Stop WebSocket to free WiFi buffers for HTTP download
+    // ESP32 with minimal WiFi config can't handle concurrent TCP connections reliably
+    if (g_ws_client) {
+        ESP_LOGI(TAG, "Stopping WebSocket for OTA download...");
+        esp_websocket_client_close(g_ws_client, pdMS_TO_TICKS(2000));
+        g_ws_connected = false;
+        vTaskDelay(pdMS_TO_TICKS(500));  // Let WiFi stack settle
+        ESP_LOGI(TAG, "WebSocket stopped, proceeding with download");
+    }
 
     esp_err_t err;
     esp_ota_handle_t ota_handle = 0;
@@ -47,8 +63,9 @@ static void ota_task(void* arg) {
     {
         esp_http_client_config_t http_config = {};
         http_config.url = s_ota_url;
-        http_config.timeout_ms = 30000;
+        http_config.timeout_ms = 60000;  // 60s timeout for large firmware files
         http_config.buffer_size = OTA_BUF_SIZE;
+        http_config.buffer_size_tx = 1024;
         http_config.keep_alive_enable = true;
 
         esp_http_client_handle_t client = esp_http_client_init(&http_config);
@@ -103,18 +120,29 @@ static void ota_task(void* arg) {
 
         int total_read = 0;
         int last_progress = -1;
+        int read_retries = 0;
         while (true) {
             int read_len = esp_http_client_read(client, buf, OTA_BUF_SIZE);
             if (read_len < 0) {
-                ESP_LOGE(TAG, "HTTP read error");
-                break;
+                read_retries++;
+                ESP_LOGW(TAG, "HTTP read error (retry %d/3, downloaded %d bytes so far)", read_retries, total_read);
+                if (read_retries >= 3) {
+                    ESP_LOGE(TAG, "HTTP read failed after 3 retries, aborting OTA");
+                    err = ESP_FAIL;
+                    break;
+                }
+                vTaskDelay(pdMS_TO_TICKS(1000));  // Wait 1s before retry
+                continue;
             }
+            read_retries = 0;  // Reset retry counter on success
+
             if (read_len == 0) {
                 // Connection closed or transfer complete
                 if (esp_http_client_is_complete_data_received(client)) {
-                    ESP_LOGI(TAG, "Download complete");
+                    ESP_LOGI(TAG, "Download complete: %d bytes", total_read);
                 } else {
-                    ESP_LOGW(TAG, "Connection closed prematurely");
+                    ESP_LOGW(TAG, "Connection closed prematurely at %d bytes", total_read);
+                    err = ESP_FAIL;
                 }
                 break;
             }
@@ -137,6 +165,11 @@ static void ota_task(void* arg) {
                     lvgl_ui_set_status(status);
                     ESP_LOGI(TAG, "OTA progress: %d%% (%d/%d)", progress, total_read, content_length);
                 }
+            }
+
+            // Yield to other tasks periodically
+            if (total_read % (OTA_BUF_SIZE * 8) == 0) {
+                vTaskDelay(pdMS_TO_TICKS(10));
             }
         }
 
@@ -198,8 +231,8 @@ bool ota_start_update(const char* url) {
     s_ota_url[sizeof(s_ota_url) - 1] = '\0';
     s_ota_running = true;
 
-    // Create OTA task with 6KB stack (uses PSRAM for download buffer)
-    BaseType_t ret = xTaskCreate(ota_task, "ota_task", 6144, NULL, 5, NULL);
+    // Create OTA task with 8KB stack (HTTP client needs stack space)
+    BaseType_t ret = xTaskCreate(ota_task, "ota_task", 8192, NULL, 5, NULL);
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create OTA task");
         s_ota_running = false;
