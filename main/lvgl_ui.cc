@@ -51,6 +51,13 @@ static lv_timer_t* gaze_timer = nullptr;
 static lv_timer_t* blink_timer = nullptr;
 static lv_timer_t* state_timer = nullptr;
 
+// Settings screen
+static lv_obj_t* main_screen = nullptr;    // saved reference to main (eye) screen
+static lv_obj_t* settings_screen = nullptr;
+static bool settings_open = false;
+static lv_obj_t* stg_vol_bar = nullptr;    // volume bar on settings screen
+static lv_obj_t* stg_vol_label = nullptr;  // "80%" on settings screen
+
 // === Nomi-style eye configuration ===
 // Eyes are rounded rectangles, expressions change shape/position/radius
 #define NOMI_EYE_COLOR_HEX  0x4FC3F7   // Soft blue
@@ -145,6 +152,8 @@ enum GestureType {
     GESTURE_TAP,
     GESTURE_SWIPE_UP,
     GESTURE_SWIPE_DOWN,
+    GESTURE_SWIPE_LEFT,
+    GESTURE_SWIPE_RIGHT,
     GESTURE_LONG_PRESS,
 };
 
@@ -383,6 +392,112 @@ static void show_volume_ui(int vol, bool muted) {
     lv_timer_set_repeat_count(vol_hide_timer, 1);
 }
 
+// --- Settings screen ---
+static void update_settings_volume() {
+    auto& audio = AudioI2S::instance();
+    if (stg_vol_bar) {
+        int vol = audio.is_muted() ? 0 : audio.get_volume();
+        lv_bar_set_value(stg_vol_bar, vol, LV_ANIM_ON);
+    }
+    if (stg_vol_label) {
+        char buf[16];
+        if (audio.is_muted()) {
+            snprintf(buf, sizeof(buf), LV_SYMBOL_MUTE " Muted");
+        } else {
+            snprintf(buf, sizeof(buf), LV_SYMBOL_VOLUME_MAX " %d%%", audio.get_volume());
+        }
+        lv_label_set_text(stg_vol_label, buf);
+    }
+}
+
+static void create_settings_screen() {
+    if (settings_screen) return;
+
+    settings_screen = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(settings_screen, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(settings_screen, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(settings_screen, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Title
+    lv_obj_t* title = lv_label_create(settings_screen);
+    lv_obj_set_style_text_color(title, lv_color_white(), 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+    lv_label_set_text(title, LV_SYMBOL_SETTINGS " Settings");
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 50);
+
+    // --- Volume section ---
+    stg_vol_label = lv_label_create(settings_screen);
+    lv_obj_set_style_text_color(stg_vol_label, lv_color_hex(0xE0E0E0), 0);
+    lv_obj_set_style_text_font(stg_vol_label, &lv_font_montserrat_18, 0);
+    lv_obj_align(stg_vol_label, LV_ALIGN_TOP_MID, 0, 100);
+
+    stg_vol_bar = lv_bar_create(settings_screen);
+    lv_obj_set_size(stg_vol_bar, 200, 10);
+    lv_obj_align(stg_vol_bar, LV_ALIGN_TOP_MID, 0, 132);
+    lv_bar_set_range(stg_vol_bar, 0, 100);
+    lv_obj_set_style_bg_color(stg_vol_bar, lv_color_hex(0x333333), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(stg_vol_bar, lv_color_hex(0x4FC3F7), LV_PART_INDICATOR);
+    lv_obj_set_style_radius(stg_vol_bar, 5, LV_PART_MAIN);
+    lv_obj_set_style_radius(stg_vol_bar, 5, LV_PART_INDICATOR);
+    lv_obj_clear_flag(stg_vol_bar, LV_OBJ_FLAG_CLICKABLE);
+
+    // Volume hint
+    lv_obj_t* vol_hint = lv_label_create(settings_screen);
+    lv_obj_set_style_text_color(vol_hint, lv_color_hex(0x666666), 0);
+    lv_obj_set_style_text_font(vol_hint, &lv_font_montserrat_14, 0);
+    lv_label_set_text(vol_hint, "Swipe " LV_SYMBOL_UP LV_SYMBOL_DOWN " to adjust");
+    lv_obj_align(vol_hint, LV_ALIGN_TOP_MID, 0, 152);
+
+    // --- Device info section ---
+    lv_obj_t* divider = lv_obj_create(settings_screen);
+    lv_obj_set_size(divider, 220, 1);
+    lv_obj_set_style_bg_color(divider, lv_color_hex(0x333333), 0);
+    lv_obj_set_style_bg_opa(divider, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(divider, 0, 0);
+    lv_obj_clear_flag(divider, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(divider, LV_ALIGN_TOP_MID, 0, 185);
+
+    lv_obj_t* dev_lbl = lv_label_create(settings_screen);
+    lv_obj_set_style_text_color(dev_lbl, lv_color_hex(0x999999), 0);
+    lv_obj_set_style_text_font(dev_lbl, &lv_font_montserrat_14, 0);
+    lv_label_set_text(dev_lbl, "Device: " HITONY_DEVICE_ID);
+    lv_obj_align(dev_lbl, LV_ALIGN_TOP_MID, 0, 200);
+
+    lv_obj_t* fw_lbl = lv_label_create(settings_screen);
+    lv_obj_set_style_text_color(fw_lbl, lv_color_hex(0x999999), 0);
+    lv_obj_set_style_text_font(fw_lbl, &lv_font_montserrat_14, 0);
+    lv_label_set_text(fw_lbl, "Firmware: v" HITONY_FW_VERSION);
+    lv_obj_align(fw_lbl, LV_ALIGN_TOP_MID, 0, 225);
+
+    // --- Back hint ---
+    lv_obj_t* back_hint = lv_label_create(settings_screen);
+    lv_obj_set_style_text_color(back_hint, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_text_font(back_hint, &lv_font_montserrat_14, 0);
+    lv_label_set_text(back_hint, LV_SYMBOL_RIGHT " Swipe to return");
+    lv_obj_align(back_hint, LV_ALIGN_BOTTOM_MID, 0, -55);
+
+    // Set initial volume display
+    update_settings_volume();
+    ESP_LOGI(TAG, "Settings screen created");
+}
+
+static void open_settings() {
+    if (settings_open) return;
+    if (!settings_screen) create_settings_screen();
+    update_settings_volume();
+    main_screen = lv_scr_act();
+    lv_scr_load_anim(settings_screen, LV_SCR_LOAD_ANIM_MOVE_LEFT, 300, 0, false);
+    settings_open = true;
+    ESP_LOGI(TAG, "Settings opened");
+}
+
+static void close_settings() {
+    if (!settings_open || !main_screen) return;
+    lv_scr_load_anim(main_screen, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 300, 0, false);
+    settings_open = false;
+    ESP_LOGI(TAG, "Settings closed");
+}
+
 static void handle_gesture(GestureType gesture) {
     auto& audio = AudioI2S::instance();
 
@@ -392,22 +507,31 @@ static void handle_gesture(GestureType gesture) {
             if (vol > 100) vol = 100;
             audio.set_volume(vol);
             if (audio.is_muted()) audio.set_mute(false);
-            show_volume_ui(vol, false);
+            if (settings_open) update_settings_volume();
+            else show_volume_ui(vol, false);
             break;
         }
         case GESTURE_SWIPE_DOWN: {
             int vol = audio.get_volume() - 10;
             if (vol < 0) vol = 0;
             audio.set_volume(vol);
-            show_volume_ui(vol, audio.is_muted());
+            if (settings_open) update_settings_volume();
+            else show_volume_ui(vol, audio.is_muted());
             break;
         }
         case GESTURE_LONG_PRESS: {
             bool mute = !audio.is_muted();
             audio.set_mute(mute);
-            show_volume_ui(audio.get_volume(), mute);
+            if (settings_open) update_settings_volume();
+            else show_volume_ui(audio.get_volume(), mute);
             break;
         }
+        case GESTURE_SWIPE_LEFT:
+            if (!settings_open) open_settings();
+            break;
+        case GESTURE_SWIPE_RIGHT:
+            if (settings_open) close_settings();
+            break;
         default:
             break;
     }
@@ -461,6 +585,16 @@ static void touch_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
                     }
                     gesture_consumed = true;
                 }
+                else if (abs(dx) > GESTURE_MIN_DISTANCE && abs(dx) > abs(dy)) {
+                    if (dx < 0) {
+                        ESP_LOGI(TAG, "Gesture: SWIPE_LEFT (dx=%d)", dx);
+                        handle_gesture(GESTURE_SWIPE_LEFT);
+                    } else {
+                        ESP_LOGI(TAG, "Gesture: SWIPE_RIGHT (dx=%d)", dx);
+                        handle_gesture(GESTURE_SWIPE_RIGHT);
+                    }
+                    gesture_consumed = true;
+                }
                 // Check long press (no significant movement)
                 else if (held_ms >= GESTURE_LONG_PRESS_MS &&
                          (dx * dx + dy * dy) < (GESTURE_MIN_DISTANCE * GESTURE_MIN_DISTANCE)) {
@@ -476,8 +610,9 @@ static void touch_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
         if (gesture_tracking) {
             gesture_tracking = false;
 
-            if (!gesture_consumed) {
+            if (!gesture_consumed && !settings_open) {
                 // Short tap without swipe → wake trigger with debounce
+                // (disabled on settings screen to avoid accidental wake)
                 static uint32_t last_wake_time = 0;
                 uint32_t now = xTaskGetTickCount();
                 if (now - last_wake_time > pdMS_TO_TICKS(3000)) {
