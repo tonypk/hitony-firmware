@@ -41,6 +41,10 @@ static lv_obj_t* expr_glasses = nullptr;
 static lv_obj_t* expr_pray = nullptr;
 static lv_obj_t* touch_layer = nullptr;
 
+// Music title display
+static lv_obj_t* music_title_label = nullptr;
+static char music_title_buf[128] = {0};
+
 static ui_state_t current_state = UI_STATE_BOOT;
 static ui_expression_t current_expr = UI_EXPR_NONE;
 static lv_timer_t* gaze_timer = nullptr;
@@ -1106,8 +1110,6 @@ void lvgl_ui_clear_touch_flag() {
 }
 
 // === Music Title Display ===
-static lv_obj_t* music_title_label = nullptr;
-static char music_title_buf[128] = {0};
 
 void lvgl_ui_set_music_title(const char* title) {
     if (!title || !title[0]) return;
