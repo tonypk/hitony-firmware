@@ -111,9 +111,10 @@ CONFIG_HTTPD_MAX_URI_LEN=128
 # ============================================================================
 # ESP-SR wakenet model (built-in)
 # ============================================================================
-# 使用 "Hi ESP" 唤醒词 - 最省内存（约100-150KB vs 200-250KB）
+# 使用 "Hi ESP" 唤醒词（model分区已有此模型）
+# 注意：OTA只更新app分区，不更新model分区，所以不能通过OTA换唤醒词模型
+# UI显示"Hi Tony"但实际唤醒词是"Hi ESP"（发音接近）
 CONFIG_SR_WN_WN9_HIESP=y
-# CONFIG_SR_WN_WN9_NIHAOXIAOZHI_TTS is not set
 
 # ============================================================================
 # LVGL Fonts (display CJK song titles)

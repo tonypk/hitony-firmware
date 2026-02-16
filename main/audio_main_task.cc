@@ -442,7 +442,7 @@ void audio_main_task(void* arg) {
                                 vad_trigger_count = 0;
                                 afe_accum_count = 0;
                                 silence_start_time = 0;
-                                lvgl_ui_set_status("Ready - say 'Hi ESP'");
+                                lvgl_ui_set_status("Say 'Hi Tony'");
                                 // 通知main task但用专门的bit表示"短录音取消"
                                 xEventGroupSetBits(g_audio_event_bits, AUDIO_EVENT_VAD_END);
                             } else {

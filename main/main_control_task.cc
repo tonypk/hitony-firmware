@@ -232,7 +232,9 @@ static void websocket_event_handler(void* handler_args, esp_event_base_t base,
             break;
         }
 
-        case WEBSOCKET_EVENT_DISCONNECTED: {
+        case WEBSOCKET_EVENT_DISCONNECTED:
+        case WEBSOCKET_EVENT_CLOSED: {
+            // Both unexpected disconnect and graceful close (e.g. OTA) need reconnect
             ws_raw_msg_t msg = {.data = nullptr, .len = 0, .msg_type = WS_MSG_DISCONNECTED};
             xQueueSend(g_ws_rx_queue, &msg, 0);
             break;
@@ -442,7 +444,7 @@ static void handle_ws_text(const char* data, uint16_t len) {
         g_hello_acked = true;
         ESP_LOGI(TAG, "Hello handshake complete, session=%s", g_session_id);
         lvgl_ui_set_status("Connected");
-        lvgl_ui_set_debug_info("Ready - say 'Hi ESP'");
+        lvgl_ui_set_debug_info("Say 'Hi Tony'");
 
         cJSON* features = cJSON_GetObjectItem(root, "features");
         if (features) {
@@ -597,7 +599,7 @@ static void handle_ws_text(const char* data, uint16_t len) {
             g_thinking_start_time = 0;
             LedController::instance().set_system_state(LedController::SystemState::LISTENING);
             lvgl_ui_set_status("Server Error");
-            lvgl_ui_set_debug_info("Ready - say 'Hi ESP'");
+            lvgl_ui_set_debug_info("Say 'Hi Tony'");
             ESP_LOGW(TAG, "Server error during thinking, resetting to IDLE");
         }
 
@@ -657,7 +659,7 @@ static void fsm_handle_event(fsm_state_t* state, fsm_event_msg_t event) {
                 ringbuffer_reset(&g_pcm_ringbuffer);
 
                 // Xiaozhi风格协议: listen(detect) + listen(start, auto)
-                ws_send_listen("detect", nullptr, "Hi ESP");
+                ws_send_listen("detect", nullptr, "Hi Tony");
                 g_audio_start_sent = ws_send_listen("start", "auto");
 
                 audio_cmd_t cmd = AUDIO_CMD_START_RECORDING;
@@ -766,7 +768,7 @@ static void fsm_handle_event(fsm_state_t* state, fsm_event_msg_t event) {
                 *state = FSM_STATE_RECORDING;
                 g_recording_start_time = xTaskGetTickCount();
                 ringbuffer_reset(&g_pcm_ringbuffer);
-                ws_send_listen("detect", nullptr, "Hi ESP");
+                ws_send_listen("detect", nullptr, "Hi Tony");
                 g_audio_start_sent = ws_send_listen("start", "auto");
 
                 audio_cmd_t cmd_rec = AUDIO_CMD_START_RECORDING;
@@ -811,7 +813,7 @@ static void fsm_handle_event(fsm_state_t* state, fsm_event_msg_t event) {
                 *state = FSM_STATE_RECORDING;
                 g_recording_start_time = xTaskGetTickCount();
                 ringbuffer_reset(&g_pcm_ringbuffer);
-                ws_send_listen("detect", nullptr, "Hi ESP");
+                ws_send_listen("detect", nullptr, "Hi Tony");
                 g_audio_start_sent = ws_send_listen("start", "auto");
 
                 audio_cmd_t cmd_rec = AUDIO_CMD_START_RECORDING;
@@ -1262,7 +1264,7 @@ void main_control_task(void* arg) {
                     lvgl_ui_set_pupil_offset(0, 0);  // 重置瞳孔位置
                     led.set_system_state(LedController::SystemState::LISTENING);
                     lvgl_ui_set_status("Connected");
-                    lvgl_ui_set_debug_info("Ready - say 'Hi ESP'");
+                    lvgl_ui_set_debug_info("Say 'Hi Tony'");
                 }
 
                 // [S0-4] 思考动画：瞳孔左右缓慢摆动，表示正在等待服务器响应
@@ -1270,6 +1272,17 @@ void main_control_task(void* arg) {
                     uint32_t elapsed = (xTaskGetTickCount() - g_thinking_start_time) * portTICK_PERIOD_MS;
                     int x_offset = (int)(8.0f * sinf((float)elapsed / 1000.0f * 3.14159f));
                     lvgl_ui_set_pupil_offset(x_offset, 0);
+                }
+
+                // Safety net: detect WS disconnect in IDLE (e.g. OTA close event missed)
+                if (!g_ws_connected && g_hello_acked) {
+                    ESP_LOGW(TAG, "IDLE but WS disconnected — forcing ERROR state for reconnect");
+                    g_hello_acked = false;
+                    g_session_id[0] = '\0';
+                    g_current_fsm_state = FSM_STATE_ERROR;
+                    led.set_system_state(LedController::SystemState::NO_NETWORK);
+                    lvgl_ui_set_state(UI_STATE_ERROR);
+                    break;
                 }
 
                 // [S1-3] g_music_was_playing 10s超时清理：防止音乐恢复请求无响应导致标记永久卡住
