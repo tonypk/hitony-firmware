@@ -248,6 +248,63 @@ static void websocket_event_handler(void* handler_args, esp_event_base_t base,
                 break;
             }
 
+            // --- Fragmented binary frame reassembly ---
+            // ESP-IDF delivers chunks with payload_offset/payload_len when frame > buffer
+            static uint8_t* s_reasm_buf = nullptr;
+            static int s_reasm_offset = 0;
+            static int s_reasm_total = 0;
+
+            if (opcode == 0x02 && data->payload_len > data->data_len) {
+                if (data->payload_offset == 0) {
+                    // First chunk — allocate reassembly buffer (pool sized by total)
+                    if (s_reasm_buf) {
+                        pool_free_by_size(s_reasm_buf, s_reasm_total);
+                        s_reasm_buf = nullptr;
+                    }
+                    if (data->payload_len <= 0 || data->payload_len > 4096) {
+                        ESP_LOGW(TAG, "WS frag: payload too large (%d)", data->payload_len);
+                        break;
+                    }
+                    pool_type_t rtype = (data->payload_len <= 256) ? POOL_S_256
+                                      : (data->payload_len <= 2048) ? POOL_L_2K : POOL_L_4K;
+                    s_reasm_buf = (uint8_t*)pool_alloc(rtype);
+                    if (!s_reasm_buf) {
+                        ESP_LOGW(TAG, "WS frag: pool alloc fail (%d)", data->payload_len);
+                        break;
+                    }
+                    s_reasm_total = data->payload_len;
+                    s_reasm_offset = 0;
+                }
+                if (s_reasm_buf && s_reasm_offset + data->data_len <= s_reasm_total) {
+                    memcpy(s_reasm_buf + s_reasm_offset, data->data_ptr, data->data_len);
+                    s_reasm_offset += data->data_len;
+                }
+                if (s_reasm_buf && s_reasm_offset >= s_reasm_total) {
+                    // Complete — enqueue reassembled frame
+                    ws_raw_msg_t msg = {
+                        .data = s_reasm_buf,
+                        .len = (uint16_t)s_reasm_total,
+                        .msg_type = WS_MSG_BINARY,
+                    };
+                    if (xQueueSend(g_ws_rx_queue, &msg, 0) != pdTRUE) {
+                        pool_free_by_size(s_reasm_buf, s_reasm_total);
+                        ESP_LOGW(TAG, "WS frag: queue full after reassembly (%d B)", s_reasm_total);
+                    }
+                    s_reasm_buf = nullptr;
+                    s_reasm_offset = 0;
+                    s_reasm_total = 0;
+                }
+                break;
+            }
+            // Clear any stale reassembly state on non-fragment
+            if (s_reasm_buf) {
+                pool_free_by_size(s_reasm_buf, s_reasm_total);
+                s_reasm_buf = nullptr;
+                s_reasm_offset = 0;
+                s_reasm_total = 0;
+            }
+
+            // --- Normal (non-fragmented) frame handling ---
             if (data->data_len <= 0 || data->data_len >= 4096) {
                 ESP_LOGW(TAG, "WS data: invalid len=%d, op=0x%02X", data->data_len, opcode);
                 break;
@@ -401,10 +458,13 @@ static bool handle_ws_binary(uint8_t* data, uint16_t len) {
         }
         memcpy(msg->data, &data[offset], pkt_len);
 
-        if (xQueueSend(g_opus_playback_queue, &msg, pdMS_TO_TICKS(10)) != pdTRUE) {
-            ESP_LOGW(TAG, "Playback queue full at TTS #%lu", g_tts_rx_count);
+        // Wait up to 30ms (half an Opus frame) for a queue slot to open.
+        // On failure, drop only THIS packet and continue parsing remaining packets
+        // (instead of break which loses the entire batch tail).
+        if (xQueueSend(g_opus_playback_queue, &msg, pdMS_TO_TICKS(30)) != pdTRUE) {
             free_opus_msg(msg);
-            break;
+            offset += pkt_len;
+            continue;
         }
 
         parsed++;
