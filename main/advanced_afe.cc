@@ -134,9 +134,10 @@ bool AdvancedAFE::init(const Config& config) {
         }
     }
 
-    // BSS波束形成：强制禁用（单麦不需要，双麦间距也太小）
+    // BSS波束形成：禁用（ESP32-S3算力不足以实时处理BSS+AEC+WakeNet）
+    // BSS使chunk_size从512翻倍到1024，导致AFE内部ringbuffer持续溢出
     afe_config->se_init = false;
-    ESP_LOGI(TAG, "BSS beamforming DISABLED (single mic MR mode)");
+    ESP_LOGI(TAG, "BSS beamforming DISABLED (ESP32-S3 CPU insufficient for real-time BSS)");
 
     // 内存分配模式：优先使用PSRAM
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
@@ -302,6 +303,7 @@ void AdvancedAFE::enable_aec(bool enable) {
     if (!afe_handle_ || !afe_data_) return;
     if (enable) {
         afe_handle_->enable_aec(afe_data_);
+        aec_counter_reset_ = true;  // 重置零输出计数器
         ESP_LOGI(TAG, "AEC dynamically ENABLED (TTS playback)");
     } else {
         afe_handle_->disable_aec(afe_data_);
@@ -314,11 +316,12 @@ void AdvancedAFE::feed(const int16_t* data, size_t samples) {
         return;
     }
 
-    // 分配缓冲区并拷贝数据（使用PSRAM，包含参考通道）
+    // 分配缓冲区并拷贝数据（使用内存池，避免每16ms malloc/free）
     size_t size = samples * total_channels_ * sizeof(int16_t);
-    int16_t* buf = (int16_t*)heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
+    // 256 samples * 3 channels * 2 bytes = 1536B → fits POOL_L_2K
+    int16_t* buf = (int16_t*)pool_alloc(POOL_L_2K);
     if (!buf) {
-        ESP_LOGW(TAG, "Failed to allocate feed buffer");
+        ESP_LOGW(TAG, "Failed to allocate feed buffer from pool");
         return;
     }
 
@@ -327,7 +330,7 @@ void AdvancedAFE::feed(const int16_t* data, size_t samples) {
     // 发送到输入队列（非阻塞）
     if (xQueueSend(input_queue_, &buf, 0) != pdTRUE) {
         ESP_LOGW(TAG, "Input queue full, dropping frame");
-        heap_caps_free(buf);
+        pool_free(POOL_L_2K, buf);
     }
 }
 
@@ -393,7 +396,7 @@ void AdvancedAFE::process_loop() {
                 accumulated_samples += input_samples;
             }
 
-            heap_caps_free(input_buf);
+            pool_free(POOL_L_2K, input_buf);
 
             // 当累积的样本达到AFE chunk size时，进行处理
             size_t required_samples = afe_chunk_size * total_channels_;
@@ -412,6 +415,10 @@ void AdvancedAFE::process_loop() {
 
                     // AEC零输出检测：如果连续100帧全零，自动禁用AEC（防止MR格式bug）
                     static uint32_t consecutive_zero_frames = 0;
+                    if (aec_counter_reset_) {
+                        consecutive_zero_frames = 0;
+                        aec_counter_reset_ = false;
+                    }
                     bool all_zero = true;
                     int16_t* pcm = (int16_t*)res->data;
                     for (int i = 0; i < samples && all_zero; i++) {

@@ -119,10 +119,10 @@ extern EventGroupHandle_t g_app_event_group;   // WiFi/WebSocket全局事件
 // PCM RingBuffer 和 Memory Pool 定义
 // ============================================================================
 
-// PCM RingBuffer（256KB PSRAM，零拷贝循环缓冲区）
+// PCM RingBuffer（16KB PSRAM，零拷贝循环缓冲区）
 typedef struct {
-    int16_t* buffer;           // 256KB PSRAM buffer
-    size_t capacity;           // 128K samples (256KB / 2 bytes)
+    int16_t* buffer;           // 16KB PSRAM buffer
+    size_t capacity;           // 8K samples (16KB / 2 bytes)
     volatile size_t write_pos; // 写指针（Audio Task）
     volatile size_t read_pos;  // 读指针（Main Task）
     SemaphoreHandle_t mutex;   // 并发访问保护
@@ -133,13 +133,16 @@ extern pcm_ringbuffer_t g_pcm_ringbuffer;
 // 参考音频 RingBuffer (AEC用，存储扬声器播放的PCM)
 extern pcm_ringbuffer_t g_ref_ringbuffer;
 
-// 固定内存池（5个池，44KB PSRAM总计）
+// MIC1 RingBuffer (双麦克风)
+extern pcm_ringbuffer_t g_mic1_ringbuffer;
+
+// 固定内存池（5个池，78KB PSRAM总计）
 typedef enum {
-    POOL_S_64 = 0,   // 64B × 64块 = 4KB（消息结构体）
+    POOL_S_64 = 0,   // 64B × 32块 = 2KB（消息结构体）
     POOL_S_128,      // 128B × 32块 = 4KB
-    POOL_S_256,      // 256B × 16块 = 4KB
-    POOL_L_2K,       // 2KB × 8块 = 16KB（Opus包）
-    POOL_L_4K,       // 4KB × 4块 = 16KB（大音频缓冲）
+    POOL_S_256,      // 256B × 32块 = 8KB（Opus包）
+    POOL_L_2K,       // 2KB × 16块 = 32KB（音频缓冲）
+    POOL_L_4K,       // 4KB × 8块 = 32KB（大音频缓冲）
     POOL_COUNT
 } pool_type_t;
 

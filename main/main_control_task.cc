@@ -6,6 +6,7 @@
 #include "ota_update.h"
 #include <esp_log.h>
 #include <esp_websocket_client.h>
+#include <esp_timer.h>
 #include <cJSON.h>
 #include <string.h>
 #include <math.h>
@@ -45,9 +46,42 @@ static uint32_t g_recording_start_time = 0; // [S0-2] 录音FSM开始时间（15
 static uint32_t g_tts_rx_count = 0;    // TTS packets received this session
 static uint32_t g_tts_drop_count = 0;  // TTS packets dropped this session
 
+// Meeting recording timer
+static esp_timer_handle_t g_meeting_timer = NULL;
+static uint32_t g_meeting_start_time = 0;
+static bool g_meeting_timer_active = false;
+
 // [S0-5] 从芯片MAC自动生成设备ID和Token
 static char g_device_id[24] = {0};    // "hitony-AABBCCDDEEFF"
 static char g_device_token[20] = {0}; // MAC反转hex作为简单token
+
+// Meeting recording timer callback
+static void meeting_timer_callback(void* arg) {
+    if (!g_meeting_timer_active) return;
+    uint32_t elapsed = (esp_timer_get_time() / 1000000) - g_meeting_start_time;
+    lvgl_ui_update_recording_time(elapsed);
+}
+
+// Start meeting recording timer
+static void start_recording_timer() {
+    g_meeting_start_time = esp_timer_get_time() / 1000000;
+    g_meeting_timer_active = true;
+    lvgl_ui_update_recording_time(0);  // 初始化为 00:00
+    if (g_meeting_timer) {
+        esp_timer_start_periodic(g_meeting_timer, 1000000);  // 1秒
+    }
+    ESP_LOGI(TAG, "Meeting recording timer started");
+}
+
+// Stop meeting recording timer
+static void stop_recording_timer() {
+    g_meeting_timer_active = false;
+    if (g_meeting_timer) {
+        esp_timer_stop(g_meeting_timer);
+    }
+    lvgl_ui_hide_recording_timer();  // Hide the timer UI
+    ESP_LOGI(TAG, "Meeting recording timer stopped");
+}
 
 static void init_device_identity() {
     uint8_t mac[6];
@@ -409,11 +443,11 @@ static void handle_ws_disconnected() {
     // Don't trigger reconnect — device will reboot after OTA completes.
     if (ota_is_running()) {
         ESP_LOGI(TAG, "WS closed during OTA — suppressing reconnect");
-        lvgl_ui_set_status("OTA updating...");
+        lvgl_ui_set_status("Updating...");
         return;
     }
 
-    lvgl_ui_set_status("Server lost");
+    lvgl_ui_set_status("Disconnected");
 
     fsm_event_msg_t disc_evt = {.event = FSM_EVENT_WS_DISCONNECTED};
     xQueueSend(g_fsm_event_queue, &disc_evt, 0);
@@ -666,7 +700,7 @@ static void handle_ws_text(const char* data, uint16_t len) {
         if (g_thinking_start_time > 0) {
             g_thinking_start_time = 0;
             LedController::instance().set_system_state(LedController::SystemState::LISTENING);
-            lvgl_ui_set_status("Server Error");
+            lvgl_ui_set_status("Error");
             lvgl_ui_set_debug_info("Say 'Hi Tony'");
             ESP_LOGW(TAG, "Server error during thinking, resetting to IDLE");
         }
@@ -687,6 +721,16 @@ static void handle_ws_text(const char* data, uint16_t len) {
     } else if (strcmp(type->valuestring, "pong") == 0) {
         ESP_LOGD(TAG, "Server pong");
 
+    } else if (strcmp(type->valuestring, "volume") == 0) {
+        cJSON* level = cJSON_GetObjectItem(root, "level");
+        if (cJSON_IsNumber(level)) {
+            int vol = level->valueint;
+            if (vol < 0) vol = 0;
+            if (vol > 100) vol = 100;
+            lvgl_ui_set_volume(vol);
+            ESP_LOGI(TAG, "Volume set to %d%%", vol);
+        }
+
     } else if (strcmp(type->valuestring, "ota_notify") == 0) {
         cJSON* version = cJSON_GetObjectItem(root, "version");
         cJSON* url = cJSON_GetObjectItem(root, "url");
@@ -698,6 +742,42 @@ static void handle_ws_text(const char* data, uint16_t len) {
                 }
             } else {
                 ESP_LOGI(TAG, "OTA: already on version %s, skipping", HITONY_FW_VERSION);
+            }
+        }
+
+    } else if (strcmp(type->valuestring, "meeting_status") == 0) {
+        cJSON* status = cJSON_GetObjectItem(root, "status");
+        if (cJSON_IsString(status)) {
+            if (strcmp(status->valuestring, "recording") == 0) {
+                // 开始录音
+                lvgl_ui_set_state(UI_STATE_RECORDING);
+                start_recording_timer();
+                ESP_LOGI(TAG, "Meeting recording started");
+
+            } else if (strcmp(status->valuestring, "ended") == 0) {
+                // 结束录音
+                stop_recording_timer();
+                lvgl_ui_set_state(UI_STATE_WS_CONNECTED);
+                ESP_LOGI(TAG, "Meeting recording ended");
+
+            } else if (strcmp(status->valuestring, "transcribing") == 0) {
+                // 转录中
+                lvgl_ui_set_status("Transcribing...");
+                ESP_LOGI(TAG, "Meeting transcribing");
+
+            } else if (strcmp(status->valuestring, "completed") == 0) {
+                // 转录完成
+                cJSON* notion_pushed = cJSON_GetObjectItem(root, "notion_pushed");
+                if (cJSON_IsTrue(notion_pushed)) {
+                    lvgl_ui_set_status("Saved to Notion");
+                    ESP_LOGI(TAG, "Meeting completed and saved to Notion");
+                } else {
+                    lvgl_ui_set_status("Transcribed");
+                    ESP_LOGI(TAG, "Meeting completed");
+                }
+                // 2秒后恢复默认状态
+                vTaskDelay(pdMS_TO_TICKS(2000));
+                lvgl_ui_set_status("");
             }
         }
     }
@@ -932,11 +1012,23 @@ void main_control_task(void* arg) {
     // [S0-5] 从芯片MAC生成唯一设备标识
     init_device_identity();
 
+    // Initialize meeting recording timer
+    esp_timer_create_args_t timer_args = {
+        .callback = meeting_timer_callback,
+        .name = "meeting_timer"
+    };
+    esp_err_t timer_ret = esp_timer_create(&timer_args, &g_meeting_timer);
+    if (timer_ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create meeting timer: %d", timer_ret);
+    } else {
+        ESP_LOGI(TAG, "Meeting timer initialized");
+    }
+
     // === 1. 等待WiFi连接（带超时，每秒更新UI）===
     // 注意：LVGL更新由独立的lvgl_task处理（带互斥锁），这里不调用lv_timer_handler()
     ESP_LOGI(TAG, "Waiting for WiFi connection (timeout: 10s)...");
     lvgl_ui_set_state(UI_STATE_WIFI_CONNECTING);  // [S1-5] 启动阶段状态灯同步
-    lvgl_ui_set_status("Connecting WiFi...");
+    lvgl_ui_set_status("Connecting...");
 
     bool wifi_connected = false;
     for (int i = 0; i < 10; i++) {
@@ -949,14 +1041,14 @@ void main_control_task(void* arg) {
         }
 
         char buf[32];
-        snprintf(buf, sizeof(buf), "Connecting WiFi... %ds", 10 - i - 1);
+        snprintf(buf, sizeof(buf), "Connecting... %ds", 10 - i - 1);
         lvgl_ui_set_status(buf);
     }
 
     if (wifi_connected) {
         ESP_LOGI(TAG, "WiFi connected");
         lvgl_ui_set_state(UI_STATE_WIFI_CONNECTED);
-        lvgl_ui_set_status("WiFi connected!");
+        lvgl_ui_set_status("Connected");
 
         // Binding info is only shown during provisioning mode (touch during boot)
         // Normal boot: skip straight to WebSocket connection
@@ -964,7 +1056,7 @@ void main_control_task(void* arg) {
     } else {
         ESP_LOGW(TAG, "WiFi timeout, running in offline mode");
         lvgl_ui_set_state(UI_STATE_ERROR);
-        lvgl_ui_set_status("Offline mode");
+        lvgl_ui_set_status("Offline");
     }
 
     // === 2. 初始化WebSocket客户端 ===
@@ -1424,7 +1516,12 @@ void main_control_task(void* arg) {
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(10));
+        // 事件驱动等待：有音频事件立即唤醒，否则10ms超时
+        // 录音时 AUDIO_EVENT_ENCODE_READY 触发即时发送 Opus 包，减少排队延迟
+        xEventGroupWaitBits(g_audio_event_bits,
+            AUDIO_EVENT_ENCODE_READY | AUDIO_EVENT_WAKE_DETECTED |
+            AUDIO_EVENT_VAD_END | AUDIO_EVENT_TOUCH_WAKE,
+            pdFALSE, pdFALSE, pdMS_TO_TICKS(10));
     }
 
     if (g_ws_client) {

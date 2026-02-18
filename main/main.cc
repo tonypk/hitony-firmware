@@ -25,8 +25,12 @@
 #include "system_monitor.h"
 #include "led_controller.h"
 #include "wifi_provisioning.h"
+#include <esp_ota_ops.h>
 
 static const char* TAG = "main";
+
+// WiFi 指数退避计数器（连接成功时重置）
+static int s_wifi_backoff_attempt = 0;
 
 // ============================================================================
 // 基础初始化
@@ -78,17 +82,22 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                  disconn_evt->reason == WIFI_REASON_NO_AP_FOUND ? "AP not found" :
                  disconn_evt->reason == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT ? "4-way handshake timeout" :
                  "Unknown");
-        ESP_LOGW(TAG, "Reconnecting...");
 
         // 清除WiFi连接事件位
         xEventGroupClearBits(g_app_event_group, EVENT_WIFI_CONNECTED);
         xEventGroupSetBits(g_app_event_group, EVENT_WIFI_DISCONNECTED);
 
-        vTaskDelay(pdMS_TO_TICKS(1000));  // 延迟1秒再重连，避免过快重连
+        // 指数退避重连：1s → 2s → 4s → 8s → 16s（上限30s）
+        int backoff_s = 1 << (s_wifi_backoff_attempt < 5 ? s_wifi_backoff_attempt : 4);
+        if (backoff_s > 30) backoff_s = 30;
+        ESP_LOGW(TAG, "WiFi reconnecting in %ds (attempt #%d)...", backoff_s, s_wifi_backoff_attempt + 1);
+        vTaskDelay(pdMS_TO_TICKS(backoff_s * 1000));
+        s_wifi_backoff_attempt++;
         esp_wifi_connect();
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*)event_data;
         ESP_LOGI(TAG, "✓ WiFi connected! IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        s_wifi_backoff_attempt = 0;  // 重置退避计数器
 
         // 设置WiFi连接事件位（供main_control_task使用）
         xEventGroupClearBits(g_app_event_group, EVENT_WIFI_DISCONNECTED);
@@ -287,7 +296,15 @@ extern "C" void app_main() {
     lvgl_ui_set_status("Touch to setup WiFi...");
     lvgl_ui_set_debug_info("");
 
-    bool force_provisioning = lvgl_ui_wait_for_touch(5000);  // Wait 5 seconds
+    // 已有WiFi凭据时缩短等待（1.5s足够检测有意触摸），无凭据时保持5s
+#if HITONY_USE_HARDCODED_WIFI
+    bool force_provisioning = false;  // 硬编码模式无需配网
+    ESP_LOGI(TAG, "Hardcoded WiFi, skipping touch wait");
+#else
+    int touch_wait_ms = wifi_provisioning_is_configured() ? 1500 : 5000;
+    ESP_LOGI(TAG, "Touch wait: %dms (configured=%d)", touch_wait_ms, wifi_provisioning_is_configured());
+    bool force_provisioning = lvgl_ui_wait_for_touch(touch_wait_ms);
+#endif
 
     if (force_provisioning) {
         ESP_LOGI(TAG, "✅ User requested WiFi configuration - PROVISIONING MODE");
@@ -403,6 +420,17 @@ extern "C" void app_main() {
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "HiTony is ready! 🎤");
     ESP_LOGI(TAG, "");
+
+    // OTA回滚保护：标记当前固件为有效（如果是OTA启动）
+    // 如果未调用此函数，连续重启会触发自动回滚到上一个固件
+    esp_ota_img_states_t ota_state;
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    if (running && esp_ota_get_state_partition(running, &ota_state) == ESP_OK) {
+        if (ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
+            esp_ota_mark_app_valid_cancel_rollback();
+            ESP_LOGI(TAG, "OTA: Firmware marked as valid (rollback cancelled)");
+        }
+    }
 
     // 主任务完成，删除自己
     // 后续所有工作由各个子任务处理

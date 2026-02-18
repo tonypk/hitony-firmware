@@ -32,7 +32,7 @@ static char s_ota_url[256] = {0};
 
 static void ota_task(void* arg) {
     ESP_LOGI(TAG, "OTA update starting: %s", s_ota_url);
-    lvgl_ui_set_status("OTA updating...");
+    lvgl_ui_set_status("Updating...");
 
     // Stop WebSocket to free WiFi buffers for HTTP download
     // ESP32 with minimal WiFi config can't handle concurrent TCP connections reliably
@@ -50,7 +50,7 @@ static void ota_task(void* arg) {
 
     if (!update_partition) {
         ESP_LOGE(TAG, "No OTA partition available");
-        lvgl_ui_set_status("OTA: no partition");
+        lvgl_ui_set_status("No partition");
         goto fail;
     }
 
@@ -71,14 +71,14 @@ static void ota_task(void* arg) {
         esp_http_client_handle_t client = esp_http_client_init(&http_config);
         if (!client) {
             ESP_LOGE(TAG, "Failed to init HTTP client");
-            lvgl_ui_set_status("OTA: HTTP error");
+            lvgl_ui_set_status("HTTP error");
             goto fail;
         }
 
         err = esp_http_client_open(client, 0);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "HTTP open failed: %s", esp_err_to_name(err));
-            lvgl_ui_set_status("OTA: connect failed");
+            lvgl_ui_set_status("Connect failed");
             esp_http_client_cleanup(client);
             goto fail;
         }
@@ -89,7 +89,7 @@ static void ota_task(void* arg) {
 
         if (status_code != 200) {
             ESP_LOGE(TAG, "HTTP error: status %d", status_code);
-            lvgl_ui_set_status("OTA: server error");
+            lvgl_ui_set_status("Server error");
             esp_http_client_close(client);
             esp_http_client_cleanup(client);
             goto fail;
@@ -99,7 +99,7 @@ static void ota_task(void* arg) {
         err = esp_ota_begin(update_partition, OTA_WITH_SEQUENTIAL_WRITES, &ota_handle);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
-            lvgl_ui_set_status("OTA: flash error");
+            lvgl_ui_set_status("Flash error");
             esp_http_client_close(client);
             esp_http_client_cleanup(client);
             goto fail;
@@ -161,7 +161,7 @@ static void ota_task(void* arg) {
                 if (progress != last_progress && progress % 5 == 0) {
                     last_progress = progress;
                     char status[32];
-                    snprintf(status, sizeof(status), "OTA: %d%%", progress);
+                    snprintf(status, sizeof(status), "%d%%", progress);
                     lvgl_ui_set_status(status);
                     ESP_LOGI(TAG, "OTA progress: %d%% (%d/%d)", progress, total_read, content_length);
                 }
@@ -179,7 +179,7 @@ static void ota_task(void* arg) {
 
         if (err != ESP_OK) {
             esp_ota_abort(ota_handle);
-            lvgl_ui_set_status("OTA: write error");
+            lvgl_ui_set_status("Write error");
             goto fail;
         }
 
@@ -190,7 +190,7 @@ static void ota_task(void* arg) {
             if (err == ESP_ERR_OTA_VALIDATE_FAILED) {
                 ESP_LOGE(TAG, "Image validation failed — corrupt download?");
             }
-            lvgl_ui_set_status("OTA: verify failed");
+            lvgl_ui_set_status("Verify failed");
             goto fail;
         }
 
@@ -198,12 +198,12 @@ static void ota_task(void* arg) {
         err = esp_ota_set_boot_partition(update_partition);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "esp_ota_set_boot_partition failed: %s", esp_err_to_name(err));
-            lvgl_ui_set_status("OTA: boot set failed");
+            lvgl_ui_set_status("Boot failed");
             goto fail;
         }
 
         ESP_LOGI(TAG, "OTA update successful! Firmware size: %d bytes. Rebooting in 2s...", total_read);
-        lvgl_ui_set_status("OTA OK! Rebooting...");
+        lvgl_ui_set_status("Rebooting...");
         vTaskDelay(pdMS_TO_TICKS(2000));
         esp_restart();
     }

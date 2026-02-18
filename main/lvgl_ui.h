@@ -12,6 +12,7 @@ typedef enum {
     UI_STATE_LISTENING,
     UI_STATE_SPEAKING,
     UI_STATE_MUSIC,
+    UI_STATE_RECORDING,      // 会议录音中
     UI_STATE_ERROR,
 } ui_state_t;
 
@@ -34,9 +35,12 @@ void lvgl_ui_set_expression(ui_expression_t expr);
 void lvgl_ui_set_debug_info(const char* info);  // Update debug info display
 void lvgl_ui_update_recording_stats(uint32_t opus_count, bool is_recording);  // Update recording stats
 void lvgl_ui_set_pupil_offset(int x_offset, int y_offset);  // Manually move pupils (-10 to 10 range)
+void lvgl_ui_set_volume(int level);  // Set device volume (0-100)
 void lvgl_ui_set_music_energy(float energy);  // Update music rhythm animation (0.0-1.0, called during playback)
 void lvgl_ui_set_music_title(const char* title);  // Show song title during music playback
 void lvgl_ui_hide_music_title();  // Hide song title
+void lvgl_ui_update_recording_time(uint32_t seconds);  // Update recording timer display
+void lvgl_ui_hide_recording_timer();  // Hide recording timer
 void lcd_only_test();
 
 typedef void (*ui_touch_cb_t)(bool pressed);

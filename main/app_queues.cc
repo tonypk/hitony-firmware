@@ -38,8 +38,8 @@ bool init_global_queues() {
         return false;
     }
 
-    // 初始化PCM RingBuffer（256KB PSRAM）
-    if (!ringbuffer_init(&g_pcm_ringbuffer, 128 * 1024)) {  // 128K samples = 256KB
+    // 初始化PCM RingBuffer（16KB PSRAM — 实际只需几百samples缓冲）
+    if (!ringbuffer_init(&g_pcm_ringbuffer, 8192)) {  // 8K samples = 16KB（节省240KB）
         ESP_LOGE(TAG, "Failed to init PCM RingBuffer");
         return false;
     }
@@ -47,6 +47,12 @@ bool init_global_queues() {
     // 初始化参考音频 RingBuffer (AEC用，4096 samples = 256ms @ 16kHz)
     if (!ringbuffer_init(&g_ref_ringbuffer, 4096)) {
         ESP_LOGE(TAG, "Failed to init Reference RingBuffer");
+        return false;
+    }
+
+    // MIC1 RingBuffer (双麦克风，与 g_ref_ringbuffer 同容量)
+    if (!ringbuffer_init(&g_mic1_ringbuffer, 4096)) {
+        ESP_LOGE(TAG, "Failed to init MIC1 RingBuffer");
         return false;
     }
 
@@ -95,7 +101,7 @@ bool init_global_queues() {
     }
 
     ESP_LOGI(TAG, "All queues initialized successfully");
-    ESP_LOGI(TAG, "PCM RingBuffer (256KB) and Memory Pools (44KB) initialized");
+    ESP_LOGI(TAG, "PCM RingBuffer (16KB) and Memory Pools (44KB) initialized");
     ESP_LOGI(TAG, "2-task communication queues initialized");
     return true;
 }
@@ -217,6 +223,7 @@ void free_opus_msg(opus_packet_msg_t* msg) {
 
 pcm_ringbuffer_t g_pcm_ringbuffer;
 pcm_ringbuffer_t g_ref_ringbuffer;
+pcm_ringbuffer_t g_mic1_ringbuffer;
 
 bool ringbuffer_init(pcm_ringbuffer_t* rb, size_t capacity) {
     rb->buffer = (int16_t*)heap_caps_malloc(capacity * sizeof(int16_t), MALLOC_CAP_SPIRAM);

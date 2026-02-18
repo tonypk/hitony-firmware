@@ -47,7 +47,7 @@ void audio_main_task(void* arg) {
     AdvancedAFE afe;
     AdvancedAFE::Config afe_cfg = {
         .sample_rate = HITONY_SAMPLE_RATE,
-        .channels = 1,           // 单麦克风（"MR"模式：1mic + 1ref，启用AEC）
+        .channels = 2,           // 双麦克风（"MMR"模式：2mic + 1ref，启用AEC）
         .frame_size = 256,       // 每通道256 samples（匹配feed调用的256）
         .enable_aec = true,      // AEC启用：使用"MR"格式（单麦+参考信号），实现TTS/音乐播放时的语音打断
         .enable_ns = true,       // 启用降噪
@@ -110,8 +110,9 @@ void audio_main_task(void* arg) {
     // === 本地状态变量 ===
     audio_mode_t mode = AUDIO_MODE_IDLE;
     alignas(16) int16_t i2s_buffer[512];           // I2S读取缓冲区（512 samples = ~32ms @ 16kHz）
-    alignas(16) int16_t afe_accumulator[960];      // AFE输出累积器（Opus需要960 samples）
+    alignas(16) int16_t afe_accumulator[320];      // AFE输出累积器（Opus 20ms帧 = 320 samples @ 16kHz）
     size_t afe_accum_count = 0;
+    const size_t enc_frame_size = opus_enc.frame_size();  // 320 for 20ms @ 16kHz
 
     uint32_t frame_count = 0;
     uint32_t i2s_read_count = 0;  // I2S成功读取次数
@@ -155,6 +156,7 @@ void audio_main_task(void* arg) {
                     opus_dec.reset();
                     ringbuffer_reset(&g_pcm_ringbuffer);  // 清除echo污染数据
                     ringbuffer_reset(&g_ref_ringbuffer);   // 清除残留参考数据
+                    ringbuffer_reset(&g_mic1_ringbuffer);  // 清除MIC1残留数据
                     if (afe_cfg.enable_aec) afe.enable_aec(false);  // 停止播放→禁用AEC
                     afe_accum_count = 0;  // 重置AFE累积器
                     // 打印内存状态（检测泄漏）
@@ -171,6 +173,7 @@ void audio_main_task(void* arg) {
                     opus_dec.reset();
                     ringbuffer_reset(&g_pcm_ringbuffer);
                     ringbuffer_reset(&g_ref_ringbuffer);  // 清除残留参考数据
+                    ringbuffer_reset(&g_mic1_ringbuffer);  // 清除MIC1残留数据
                     if (afe_cfg.enable_aec) afe.enable_aec(false);  // 录音时禁用AEC
                 }
             }
@@ -267,12 +270,15 @@ void audio_main_task(void* arg) {
                 last_volume_print = volume_check_count;
             }
 
-            // 从立体声I2S数据提取MIC0单声道，写入RingBuffer
+            // 从立体声I2S数据提取MIC0和MIC1，分别写入RingBuffer
             int16_t mono_buffer[256];
+            int16_t mic1_buffer[256];
             for (int i = 0; i < mono_samples && i < 256; i++) {
-                mono_buffer[i] = i2s_buffer[i * 2];  // 取MIC0（偶数索引）
+                mono_buffer[i] = i2s_buffer[i * 2];      // MIC0（偶数索引）
+                mic1_buffer[i] = i2s_buffer[i * 2 + 1];  // MIC1（奇数索引）
             }
             size_t written = ringbuffer_write(&g_pcm_ringbuffer, mono_buffer, mono_samples);
+            ringbuffer_write(&g_mic1_ringbuffer, mic1_buffer, mono_samples);
 
             // 前3次写入打印详细信息
             static int write_count = 0;
@@ -305,6 +311,7 @@ void audio_main_task(void* arg) {
                     silence_start_time = 0;
                     recording_start_time = xTaskGetTickCount();
                     ringbuffer_reset(&g_pcm_ringbuffer);
+                    ringbuffer_reset(&g_mic1_ringbuffer);
                     break;
 
                 case AUDIO_CMD_STOP_RECORDING:
@@ -337,6 +344,7 @@ void audio_main_task(void* arg) {
                     last_vad_trigger_time = xTaskGetTickCount();
                     vad_trigger_count = 0;
                     ringbuffer_reset(&g_ref_ringbuffer);  // 清除残留参考数据
+                    ringbuffer_reset(&g_mic1_ringbuffer);  // 清除MIC1残留数据
                     if (afe_cfg.enable_aec) afe.enable_aec(false);  // 停止播放→禁用AEC
                     break;
             }
@@ -361,9 +369,17 @@ void audio_main_task(void* arg) {
             }
 
             if (afe_cfg.enable_aec) {
-                // AEC "MR"模式：2通道交织 [M, R, M, R, ...]
-                int16_t mic_input[256];    // 单声道mic数据
-                ringbuffer_read(&g_pcm_ringbuffer, mic_input, 256);
+                // AEC "MMR"模式：3通道交织 [M0, M1, R, M0, M1, R, ...]
+                int16_t mic0_input[256];
+                ringbuffer_read(&g_pcm_ringbuffer, mic0_input, 256);
+
+                int16_t mic1_input[256];
+                size_t mic1_avail = ringbuffer_data_available(&g_mic1_ringbuffer);
+                if (mic1_avail >= 256) {
+                    ringbuffer_read(&g_mic1_ringbuffer, mic1_input, 256);
+                } else {
+                    memset(mic1_input, 0, sizeof(mic1_input));
+                }
 
                 // 获取参考音频（播放中=实际PCM，空闲=零）
                 int16_t ref_input[256];
@@ -374,18 +390,33 @@ void audio_main_task(void* arg) {
                     memset(ref_input, 0, sizeof(ref_input));
                 }
 
-                // 交织为 [M, R, M, R, ...] (2ch) — "MR"格式
-                int16_t afe_input[512];
+                // 交织为 [M0, M1, R, M0, M1, R, ...] (3ch) — "MMR"格式
+                int16_t afe_input[768];
                 for (int i = 0; i < 256; i++) {
-                    afe_input[i * 2]     = mic_input[i];    // Mic 0
-                    afe_input[i * 2 + 1] = ref_input[i];    // Reference
+                    afe_input[i * 3]     = mic0_input[i];   // Mic 0
+                    afe_input[i * 3 + 1] = mic1_input[i];   // Mic 1
+                    afe_input[i * 3 + 2] = ref_input[i];    // Reference
                 }
 
                 afe.feed(afe_input, 256);
             } else {
-                // 无AEC模式：单声道直接喂入
-                int16_t afe_input[256];
-                ringbuffer_read(&g_pcm_ringbuffer, afe_input, 256);
+                // 无AEC模式："MM"格式，双通道交织
+                int16_t mic0_input[256];
+                ringbuffer_read(&g_pcm_ringbuffer, mic0_input, 256);
+
+                int16_t mic1_input[256];
+                size_t mic1_avail = ringbuffer_data_available(&g_mic1_ringbuffer);
+                if (mic1_avail >= 256) {
+                    ringbuffer_read(&g_mic1_ringbuffer, mic1_input, 256);
+                } else {
+                    memset(mic1_input, 0, sizeof(mic1_input));
+                }
+
+                int16_t afe_input[512];
+                for (int i = 0; i < 256; i++) {
+                    afe_input[i * 2]     = mic0_input[i];
+                    afe_input[i * 2 + 1] = mic1_input[i];
+                }
                 afe.feed(afe_input, 256);
             }
         }
@@ -490,9 +521,9 @@ void audio_main_task(void* arg) {
                         first_recording = false;
                     }
 
-                    // 累积AFE输出到960 samples（Opus帧大小）
-                    size_t to_copy = (afe_samples < (960 - afe_accum_count)) ?
-                                     afe_samples : (960 - afe_accum_count);
+                    // 累积AFE输出到enc_frame_size samples（Opus帧大小）
+                    size_t to_copy = (afe_samples < (int)(enc_frame_size - afe_accum_count)) ?
+                                     afe_samples : (enc_frame_size - afe_accum_count);
 
                     memcpy(&afe_accumulator[afe_accum_count], afe_output, to_copy * sizeof(int16_t));
                     afe_accum_count += to_copy;
@@ -501,16 +532,16 @@ void audio_main_task(void* arg) {
                     static uint32_t accum_log_count = 0;
                     accum_log_count++;
                     if (accum_log_count % 10 == 0) {
-                        ESP_LOGD(TAG, "📊 AFE累积进度: %zu/960 samples (%d%%)",
-                                 afe_accum_count, (afe_accum_count * 100) / 960);
+                        ESP_LOGD(TAG, "📊 AFE累积进度: %zu/%zu samples (%d%%)",
+                                 afe_accum_count, enc_frame_size, (int)(afe_accum_count * 100 / enc_frame_size));
                     }
 
-                    // 当累积满960 samples时，进行Opus编码
-                    if (afe_accum_count >= 960) {
+                    // 当累积满enc_frame_size samples时，进行Opus编码
+                    if (afe_accum_count >= enc_frame_size) {
                         g_opus_encode_count++;
 
-                        alignas(16) uint8_t opus_packet[512];  // 增大buffer：60ms帧需要>280字节
-                        int opus_len = opus_enc.encode(afe_accumulator, 960,
+                        alignas(16) uint8_t opus_packet[256];  // 20ms帧 ~100字节
+                        int opus_len = opus_enc.encode(afe_accumulator, enc_frame_size,
                                                        opus_packet, sizeof(opus_packet));
 
                         if (opus_len > 0) {

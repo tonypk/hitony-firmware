@@ -16,16 +16,12 @@
 // WebSocket endpoint
 #define HITONY_WS_URL "ws://136.111.249.161:9001/ws"  // Using IP to avoid DNS issues
 
-// Device identity / token
-// IMPORTANT: Replace HITONY_DEVICE_TOKEN with your actual device token
-// Register via: curl -X POST http://SERVER:9001/register -H 'Content-Type: application/json'
-//   -d '{"device_id":"hitony-001","token":"your_token"}'
+// Device identity
 #define HITONY_DEVICE_ID "hitony-001"
-#define HITONY_DEVICE_TOKEN "devtoken"  // TODO: Replace with your actual token
 
 // Audio parameters (恢复16kHz，使用更高增益补偿音量)
 #define HITONY_SAMPLE_RATE 16000  // 恢复16kHz
-#define HITONY_CHANNELS 1
+#define HITONY_CHANNELS 2
 #define HITONY_BITS 16
 
 // Audio frame size (20ms @ 16kHz mono = 320 samples = 640 bytes)
@@ -102,18 +98,11 @@
 #define HITONY_LED_G GPIO_NUM_43  // Green LED for status indication
 
 // Firmware version (semantic versioning)
-#define HITONY_FW_VERSION "2.4.0"
+#define HITONY_FW_VERSION "2.7.0"
 
 // OTA update server URL (HTTP, not HTTPS — ESP32-S3 with limited RAM)
 #define HITONY_OTA_URL "http://136.111.249.161/api/ota/firmware"
 
 // Feature toggles
-#define HITONY_ENABLE_WAKE_WORD 0
+#define HITONY_ENABLE_WAKE_WORD 1  // Voice wake word "Hi Tony" enabled
 
-// ESP-SR wake word
-typedef enum {
-    WAKE_WORD_MODE_AFE = 0,
-    WAKE_WORD_MODE_ESP = 1,
-} wake_word_mode_t;
-
-#define HITONY_WAKE_WORD_MODE WAKE_WORD_MODE_AFE

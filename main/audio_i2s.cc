@@ -69,8 +69,8 @@ bool AudioI2S::init() {
     i2s_chan_config_t chan_cfg = {};
     chan_cfg.id = I2S_NUM_0;
     chan_cfg.role = I2S_ROLE_MASTER;
-    chan_cfg.dma_desc_num = 8;
-    chan_cfg.dma_frame_num = 256;
+    chan_cfg.dma_desc_num = 4;      // 4 descriptors (was 8)
+    chan_cfg.dma_frame_num = 128;   // 128 frames/desc (was 256) → 512 samples = 32ms @ 16kHz stereo
     chan_cfg.auto_clear_after_cb = true;
     chan_cfg.auto_clear_before_cb = false;
     chan_cfg.intr_priority = 0;
@@ -195,17 +195,17 @@ bool AudioI2S::init() {
     };
     ESP_ERROR_CHECK(esp_codec_dev_open((esp_codec_dev_handle_t)input_dev_, &in_fs));
 
-    // 设置麦克风输入增益（使用最大值37.5dB补偿16kHz音量不足）
+    // 设置麦克风输入增益（33dB，留出4.5dB动态余量防止ADC饱和）
     // 这是WakeNet正常工作的关键！增益不足会导致唤醒词识别失败
     // 为双麦克风（MIC1+MIC2）设置增益
-    // ES7210支持0-37.5dB增益范围，使用最大值以获得最佳效果
+    // ES7210支持0-37.5dB增益范围，33dB在保证灵敏度的同时避免环境噪音突发导致削波
     esp_err_t gain_err = esp_codec_dev_set_in_channel_gain(
         (esp_codec_dev_handle_t)input_dev_,
         ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0) | ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1),  // MIC1 + MIC2
-        37.5  // 最大增益37.5dB（相比30dB提升2.4倍音量）
+        33.0  // 33dB（留出4.5dB动态余量）
     );
     if (gain_err == ESP_OK) {
-        ESP_LOGI(TAG, "✅ Microphone gain set to 37.5dB @ 16kHz (MIC1 + MIC2)");
+        ESP_LOGI(TAG, "✅ Microphone gain set to 33dB @ 16kHz (MIC1 + MIC2)");
     } else {
         ESP_LOGW(TAG, "Failed to set microphone gain: %s", esp_err_to_name(gain_err));
     }

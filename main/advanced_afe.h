@@ -161,6 +161,7 @@ private:
     volatile bool wake_detected_ = false;
     volatile bool vad_active_ = false;
     volatile int audio_energy_ = 0;
+    volatile bool aec_counter_reset_ = false;  // 重置AEC零输出计数器
 
     // 通道
     int total_channels_ = 0;  // 总通道数 (mic + ref)

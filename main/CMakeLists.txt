@@ -3,7 +3,6 @@ idf_component_register(
         "main.cc"
         "ws_client.cc"
         "audio_i2s.cc"
-        "wake_word.cc"
         "dns_server.cc"
         "lvgl_ui.cc"
         "opus_decoder.cc"

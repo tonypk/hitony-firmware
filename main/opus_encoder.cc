@@ -21,13 +21,13 @@ bool OpusEncoder::init(int sample_rate, int channels, int bitrate) {
     channels_ = channels;
     bitrate_ = bitrate;
 
-    // 配置Opus编码器 (60ms帧, VoIP模式)
+    // 配置Opus编码器 (20ms帧, VoIP模式)
     esp_opus_enc_config_t cfg = {
         .sample_rate = sample_rate,
         .channel = channels,
         .bits_per_sample = 16,
         .bitrate = bitrate,
-        .frame_duration = ESP_OPUS_ENC_FRAME_DURATION_60_MS,  // 60ms帧
+        .frame_duration = ESP_OPUS_ENC_FRAME_DURATION_20_MS,  // 20ms帧（减少~40ms编码延迟）
         .application_mode = ESP_OPUS_ENC_APPLICATION_VOIP,
         .complexity = 8,  // 高复杂度 (0-10范围)，优先质量（快速说话需要）
         .enable_fec = false,

@@ -46,6 +46,9 @@ static lv_obj_t* touch_layer = nullptr;
 static lv_obj_t* music_title_label = nullptr;
 static char music_title_buf[128] = {0};
 
+// Recording timer display
+static lv_obj_t* recording_timer_label = nullptr;
+
 static ui_state_t current_state = UI_STATE_BOOT;
 static ui_expression_t current_expr = UI_EXPR_NONE;
 static lv_timer_t* gaze_timer = nullptr;
@@ -177,16 +180,17 @@ static void lvgl_unlock() {
 
 static const char* state_text(ui_state_t state) {
     switch (state) {
-        case UI_STATE_BOOT: return "BOOT: Initializing...";
-        case UI_STATE_PROVISIONING: return "SETUP: WiFi Config";
-        case UI_STATE_WIFI_CONNECTING: return "WiFi: Connecting...";
-        case UI_STATE_WIFI_CONNECTED: return "WiFi: Connected";
-        case UI_STATE_WS_CONNECTED: return "READY: Touch to talk";
-        case UI_STATE_LISTENING: return "LISTENING...";
-        case UI_STATE_SPEAKING: return "SPEAKING...";
-        case UI_STATE_MUSIC: return "MUSIC";
-        case UI_STATE_ERROR: return "ERROR: Check network";
-        default: return "UNKNOWN";
+        case UI_STATE_BOOT: return "Starting...";
+        case UI_STATE_PROVISIONING: return "WiFi Setup";
+        case UI_STATE_WIFI_CONNECTING: return "Connecting...";
+        case UI_STATE_WIFI_CONNECTED: return "Connected";
+        case UI_STATE_WS_CONNECTED: return "Ready";
+        case UI_STATE_LISTENING: return "Listening...";
+        case UI_STATE_SPEAKING: return "Speaking...";
+        case UI_STATE_MUSIC: return LV_SYMBOL_AUDIO " Music";
+        case UI_STATE_RECORDING: return "REC Recording";  // Recording indicator
+        case UI_STATE_ERROR: return LV_SYMBOL_WARNING " Error";
+        default: return "Unknown";
     }
 }
 
@@ -301,6 +305,9 @@ static void apply_state(void* arg) {
             case UI_STATE_SPEAKING:
             case UI_STATE_MUSIC:
                 expr = EXPR_HAPPY;
+                break;
+            case UI_STATE_RECORDING:
+                expr = EXPR_WIDE;  // 专注表情（录音中）
                 break;
             case UI_STATE_ERROR:
                 expr = EXPR_ERROR;
@@ -424,17 +431,17 @@ static void create_settings_screen() {
     lv_obj_set_style_text_color(title, lv_color_white(), 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
     lv_label_set_text(title, LV_SYMBOL_SETTINGS " Settings");
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 50);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 35);
 
     // --- Volume section ---
     stg_vol_label = lv_label_create(settings_screen);
     lv_obj_set_style_text_color(stg_vol_label, lv_color_hex(0xE0E0E0), 0);
     lv_obj_set_style_text_font(stg_vol_label, &lv_font_montserrat_18, 0);
-    lv_obj_align(stg_vol_label, LV_ALIGN_TOP_MID, 0, 100);
+    lv_obj_align(stg_vol_label, LV_ALIGN_TOP_MID, 0, 75);
 
     stg_vol_bar = lv_bar_create(settings_screen);
     lv_obj_set_size(stg_vol_bar, 200, 10);
-    lv_obj_align(stg_vol_bar, LV_ALIGN_TOP_MID, 0, 132);
+    lv_obj_align(stg_vol_bar, LV_ALIGN_TOP_MID, 0, 105);
     lv_bar_set_range(stg_vol_bar, 0, 100);
     lv_obj_set_style_bg_color(stg_vol_bar, lv_color_hex(0x333333), LV_PART_MAIN);
     lv_obj_set_style_bg_color(stg_vol_bar, lv_color_hex(0x4FC3F7), LV_PART_INDICATOR);
@@ -447,7 +454,7 @@ static void create_settings_screen() {
     lv_obj_set_style_text_color(vol_hint, lv_color_hex(0x666666), 0);
     lv_obj_set_style_text_font(vol_hint, &lv_font_montserrat_14, 0);
     lv_label_set_text(vol_hint, "Swipe " LV_SYMBOL_UP LV_SYMBOL_DOWN " to adjust");
-    lv_obj_align(vol_hint, LV_ALIGN_TOP_MID, 0, 152);
+    lv_obj_align(vol_hint, LV_ALIGN_TOP_MID, 0, 123);
 
     // --- Device info section ---
     lv_obj_t* divider = lv_obj_create(settings_screen);
@@ -456,24 +463,24 @@ static void create_settings_screen() {
     lv_obj_set_style_bg_opa(divider, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(divider, 0, 0);
     lv_obj_clear_flag(divider, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_align(divider, LV_ALIGN_TOP_MID, 0, 185);
+    lv_obj_align(divider, LV_ALIGN_TOP_MID, 0, 150);
 
     lv_obj_t* dev_lbl = lv_label_create(settings_screen);
     lv_obj_set_style_text_color(dev_lbl, lv_color_hex(0x999999), 0);
     lv_obj_set_style_text_font(dev_lbl, &lv_font_montserrat_14, 0);
     lv_label_set_text(dev_lbl, "Device: " HITONY_DEVICE_ID);
-    lv_obj_align(dev_lbl, LV_ALIGN_TOP_MID, 0, 200);
+    lv_obj_align(dev_lbl, LV_ALIGN_TOP_MID, 0, 162);
 
     lv_obj_t* fw_lbl = lv_label_create(settings_screen);
     lv_obj_set_style_text_color(fw_lbl, lv_color_hex(0x999999), 0);
     lv_obj_set_style_text_font(fw_lbl, &lv_font_montserrat_14, 0);
     lv_label_set_text(fw_lbl, "Firmware: v" HITONY_FW_VERSION);
-    lv_obj_align(fw_lbl, LV_ALIGN_TOP_MID, 0, 225);
+    lv_obj_align(fw_lbl, LV_ALIGN_TOP_MID, 0, 182);
 
     // --- WiFi Reset button ---
     lv_obj_t* wifi_btn = lv_btn_create(settings_screen);
-    lv_obj_set_size(wifi_btn, 180, 40);
-    lv_obj_align(wifi_btn, LV_ALIGN_TOP_MID, 0, 260);
+    lv_obj_set_size(wifi_btn, 180, 38);
+    lv_obj_align(wifi_btn, LV_ALIGN_TOP_MID, 0, 210);
     lv_obj_set_style_bg_color(wifi_btn, lv_color_hex(0x333333), 0);
     lv_obj_set_style_bg_color(wifi_btn, lv_color_hex(0x555555), LV_STATE_PRESSED);
     lv_obj_set_style_radius(wifi_btn, 20, 0);
@@ -507,7 +514,7 @@ static void create_settings_screen() {
     lv_obj_set_style_text_color(back_hint, lv_color_hex(0x555555), 0);
     lv_obj_set_style_text_font(back_hint, &lv_font_montserrat_14, 0);
     lv_label_set_text(back_hint, LV_SYMBOL_RIGHT " Swipe to return");
-    lv_obj_align(back_hint, LV_ALIGN_BOTTOM_MID, 0, -55);
+    lv_obj_align(back_hint, LV_ALIGN_BOTTOM_MID, 0, -40);
 
     // Set initial volume display
     update_settings_volume();
@@ -930,7 +937,7 @@ static void init_display() {
 #else
     esp_lcd_panel_io_spi_config_t io_cfg = ST77916_PANEL_IO_SPI_CONFIG(HITONY_QSPI_CS, HITONY_QSPI_DC, NULL, NULL);
 #endif
-    io_cfg.pclk_hz = HITONY_LCD_USE_QSPI ? 10000000 : 100000;
+    io_cfg.pclk_hz = HITONY_LCD_USE_QSPI ? 40000000 : 100000;  // 40MHz QSPI（ST77916支持最高80MHz）
     io_cfg.spi_mode = 0;
     ESP_LOGI(TAG, "LCD SPI: mode=%d pclk=%dHz CS=%d",
              io_cfg.spi_mode, (int)io_cfg.pclk_hz, (int)HITONY_QSPI_CS);
@@ -1073,13 +1080,13 @@ void lvgl_ui_init() {
 
     // Boot-phase status text (shown only during startup, hidden after WS connected)
     status_label = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_color(status_label, lv_color_hex(0xCCCCCC), 0);
-    lv_obj_set_style_text_font(status_label, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(status_label, lv_color_hex(0xEEEEEE), 0);
+    lv_obj_set_style_text_font(status_label, &lv_font_montserrat_22, 0);
     lv_obj_set_width(status_label, 280);
     lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(status_label, LV_LABEL_LONG_WRAP);
     lv_label_set_text(status_label, state_text(current_state));
-    lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 35);
+    lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 32);
 
 
     // Fullscreen touch layer
@@ -1244,6 +1251,27 @@ void lvgl_ui_update_recording_stats(uint32_t opus_count, bool is_recording) {
              opus_count, is_recording, touch_count);
 }
 
+void lvgl_ui_set_volume(int level) {
+    if (level < 0) level = 0;
+    if (level > 100) level = 100;
+
+    auto& audio = AudioI2S::instance();
+    audio.set_volume(level);
+    if (level > 0 && audio.is_muted()) {
+        audio.set_mute(false);
+    }
+
+    lvgl_lock();
+    if (settings_open) {
+        update_settings_volume();
+    } else {
+        show_volume_ui(level, level == 0);
+    }
+    lvgl_unlock();
+
+    ESP_LOGI(TAG, "Volume set to %d%%", level);
+}
+
 void lvgl_ui_set_pupil_offset(int x_offset, int y_offset) {
     // Pupils removed — no-op
     (void)x_offset;
@@ -1309,6 +1337,44 @@ void lvgl_ui_hide_music_title() {
     if (music_title_label) {
         lv_obj_add_flag(music_title_label, LV_OBJ_FLAG_HIDDEN);
     }
+    lvgl_unlock();
+}
+
+void lvgl_ui_update_recording_time(uint32_t seconds) {
+    if (!lvgl_lock(100)) {  // Increased timeout to 100ms for reliability
+        ESP_LOGW("lvgl_ui", "Failed to acquire lock for recording timer update");
+        return;
+    }
+
+    // Create label if not exists
+    if (!recording_timer_label) {
+        recording_timer_label = lv_label_create(lv_scr_act());
+        lv_obj_set_style_text_font(recording_timer_label, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(recording_timer_label, lv_color_hex(0xFF0000), 0);  // Red
+        lv_obj_align(recording_timer_label, LV_ALIGN_TOP_MID, 0, 70);
+    }
+
+    // Update timer text
+    uint32_t minutes = seconds / 60;
+    uint32_t secs = seconds % 60;
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%02lu:%02lu", (unsigned long)minutes, (unsigned long)secs);
+    lv_label_set_text(recording_timer_label, buf);
+
+    // Always show the label when this function is called during recording
+    // Hide it explicitly via stop_recording_timer or state change
+    lv_obj_clear_flag(recording_timer_label, LV_OBJ_FLAG_HIDDEN);
+
+    lvgl_unlock();
+}
+
+void lvgl_ui_hide_recording_timer() {
+    if (!lvgl_lock(100)) return;
+
+    if (recording_timer_label) {
+        lv_obj_add_flag(recording_timer_label, LV_OBJ_FLAG_HIDDEN);
+    }
+
     lvgl_unlock();
 }
 
