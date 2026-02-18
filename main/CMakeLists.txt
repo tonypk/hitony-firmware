@@ -1,7 +1,6 @@
 idf_component_register(
     SRCS
         "main.cc"
-        "ws_client.cc"
         "audio_i2s.cc"
         "dns_server.cc"
         "lvgl_ui.cc"
