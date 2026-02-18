@@ -235,43 +235,37 @@ bool ringbuffer_init(pcm_ringbuffer_t* rb, size_t capacity) {
     rb->capacity = capacity;
     rb->write_pos = 0;
     rb->read_pos = 0;
-    rb->mutex = xSemaphoreCreateMutex();
 
-    if (!rb->mutex) {
-        heap_caps_free(rb->buffer);
-        ESP_LOGE(TAG, "Failed to create RingBuffer mutex");
-        return false;
-    }
-
-    ESP_LOGI(TAG, "RingBuffer initialized: %zu samples (% zuKB)", capacity, (capacity * sizeof(int16_t)) / 1024);
+    ESP_LOGI(TAG, "RingBuffer initialized (lock-free SPSC): %zu samples (%zuKB)",
+             capacity, (capacity * sizeof(int16_t)) / 1024);
     return true;
 }
 
 size_t ringbuffer_write(pcm_ringbuffer_t* rb, const int16_t* data, size_t samples) {
     if (!rb || !data || samples == 0) return 0;
 
-    xSemaphoreTake(rb->mutex, portMAX_DELAY);
+    // 读取消费者指针的快照（volatile确保每次从内存读取）
+    const size_t read_pos = rb->read_pos;
+    const size_t write_pos = rb->write_pos;
 
     // 计算可用空间（保留1个样本防止满/空混淆）
-    size_t available_space = (rb->read_pos - rb->write_pos - 1 + rb->capacity) % rb->capacity;
+    size_t available_space = (read_pos - write_pos - 1 + rb->capacity) % rb->capacity;
     size_t to_write = (samples < available_space) ? samples : available_space;
 
-    if (to_write == 0) {
-        xSemaphoreGive(rb->mutex);
-        return 0;  // 缓冲区已满
-    }
+    if (to_write == 0) return 0;
 
     // 处理wrap-around
-    size_t part1 = rb->capacity - rb->write_pos;
+    size_t part1 = rb->capacity - write_pos;
     if (to_write <= part1) {
-        memcpy(&rb->buffer[rb->write_pos], data, to_write * sizeof(int16_t));
+        memcpy(&rb->buffer[write_pos], data, to_write * sizeof(int16_t));
     } else {
-        memcpy(&rb->buffer[rb->write_pos], data, part1 * sizeof(int16_t));
+        memcpy(&rb->buffer[write_pos], data, part1 * sizeof(int16_t));
         memcpy(&rb->buffer[0], data + part1, (to_write - part1) * sizeof(int16_t));
     }
 
-    rb->write_pos = (rb->write_pos + to_write) % rb->capacity;
-    xSemaphoreGive(rb->mutex);
+    // 内存屏障：确保数据写入对消费者可见后再更新write_pos
+    __sync_synchronize();
+    rb->write_pos = (write_pos + to_write) % rb->capacity;
 
     return to_write;
 }
@@ -279,49 +273,46 @@ size_t ringbuffer_write(pcm_ringbuffer_t* rb, const int16_t* data, size_t sample
 size_t ringbuffer_read(pcm_ringbuffer_t* rb, int16_t* out, size_t samples) {
     if (!rb || !out || samples == 0) return 0;
 
-    xSemaphoreTake(rb->mutex, portMAX_DELAY);
+    // 读取生产者指针的快照
+    const size_t write_pos = rb->write_pos;
+    const size_t read_pos = rb->read_pos;
 
     // 计算可读数据量
-    size_t available = (rb->write_pos - rb->read_pos + rb->capacity) % rb->capacity;
+    size_t available = (write_pos - read_pos + rb->capacity) % rb->capacity;
     size_t to_read = (samples < available) ? samples : available;
 
-    if (to_read == 0) {
-        xSemaphoreGive(rb->mutex);
-        return 0;  // 缓冲区为空
-    }
+    if (to_read == 0) return 0;
+
+    // 内存屏障：确保读取write_pos后再读数据
+    __sync_synchronize();
 
     // 处理wrap-around
-    size_t part1 = rb->capacity - rb->read_pos;
+    size_t part1 = rb->capacity - read_pos;
     if (to_read <= part1) {
-        memcpy(out, &rb->buffer[rb->read_pos], to_read * sizeof(int16_t));
+        memcpy(out, &rb->buffer[read_pos], to_read * sizeof(int16_t));
     } else {
-        memcpy(out, &rb->buffer[rb->read_pos], part1 * sizeof(int16_t));
+        memcpy(out, &rb->buffer[read_pos], part1 * sizeof(int16_t));
         memcpy(out + part1, &rb->buffer[0], (to_read - part1) * sizeof(int16_t));
     }
 
-    rb->read_pos = (rb->read_pos + to_read) % rb->capacity;
-    xSemaphoreGive(rb->mutex);
+    // 内存屏障：确保数据读完后再更新read_pos
+    __sync_synchronize();
+    rb->read_pos = (read_pos + to_read) % rb->capacity;
 
     return to_read;
 }
 
 size_t ringbuffer_data_available(pcm_ringbuffer_t* rb) {
     if (!rb) return 0;
-
-    xSemaphoreTake(rb->mutex, portMAX_DELAY);
-    size_t avail = (rb->write_pos - rb->read_pos + rb->capacity) % rb->capacity;
-    xSemaphoreGive(rb->mutex);
-
-    return avail;
+    // volatile读取确保获取最新值
+    return (rb->write_pos - rb->read_pos + rb->capacity) % rb->capacity;
 }
 
 void ringbuffer_reset(pcm_ringbuffer_t* rb) {
     if (!rb) return;
-
-    xSemaphoreTake(rb->mutex, portMAX_DELAY);
+    // 仅在idle状态调用（无并发访问）
     rb->write_pos = 0;
     rb->read_pos = 0;
-    xSemaphoreGive(rb->mutex);
 }
 
 // ============================================================================
@@ -444,7 +435,9 @@ void pool_free(pool_type_t type, void* ptr) {
 void pool_free_by_size(void* ptr, size_t len) {
     if (!ptr) return;
     pool_type_t type;
-    if (len <= 256) type = POOL_S_256;
+    if (len <= 64) type = POOL_S_64;
+    else if (len <= 128) type = POOL_S_128;
+    else if (len <= 256) type = POOL_S_256;
     else if (len <= 2048) type = POOL_L_2K;
     else type = POOL_L_4K;
     pool_free(type, ptr);

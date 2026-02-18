@@ -119,13 +119,12 @@ extern EventGroupHandle_t g_app_event_group;   // WiFi/WebSocket全局事件
 // PCM RingBuffer 和 Memory Pool 定义
 // ============================================================================
 
-// PCM RingBuffer（16KB PSRAM，零拷贝循环缓冲区）
+// PCM RingBuffer（Lock-free SPSC，单生产者单消费者无锁环形缓冲区）
 typedef struct {
-    int16_t* buffer;           // 16KB PSRAM buffer
-    size_t capacity;           // 8K samples (16KB / 2 bytes)
-    volatile size_t write_pos; // 写指针（Audio Task）
-    volatile size_t read_pos;  // 读指针（Main Task）
-    SemaphoreHandle_t mutex;   // 并发访问保护
+    int16_t* buffer;           // PSRAM buffer
+    size_t capacity;           // 样本数
+    volatile size_t write_pos; // 写指针（仅生产者写）
+    volatile size_t read_pos;  // 读指针（仅消费者写）
 } pcm_ringbuffer_t;
 
 extern pcm_ringbuffer_t g_pcm_ringbuffer;

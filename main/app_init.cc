@@ -60,7 +60,7 @@ bool create_all_tasks() {
         {
             .name = "main_ctrl",
             .func = main_control_task,
-            .stack_size = 8192,   // 8KB (从12KB减少，释放4KB RAM)
+            .stack_size = 12288,  // 12KB (cJSON解析需要足够栈空间)
             .priority = 10,       // 中等优先级
             .core_id = 0,
             .param = nullptr,
@@ -76,11 +76,11 @@ bool create_all_tasks() {
 
     ESP_LOGI(TAG, "==================================================");
     ESP_LOGI(TAG, "2-task architecture created successfully!");
-    ESP_LOGI(TAG, "Total stack: 40KB (32+8, optimized for RAM)");
-    ESP_LOGI(TAG, "Core 0: main_ctrl (8KB) - WebSocket, FSM, UI, LED, Heartbeat");
+    ESP_LOGI(TAG, "Total stack: 44KB (32+12)");
+    ESP_LOGI(TAG, "Core 0: main_ctrl (12KB) - WebSocket, FSM, UI, LED, Heartbeat");
     ESP_LOGI(TAG, "Core 1: audio_main (32KB) - I2S, AFE, Wake, Opus, Mixer");
     ESP_LOGI(TAG, "AFE task (12KB) + LED task (2KB) created separately");
-    ESP_LOGI(TAG, "Total app stack: 52KB (vs 82KB before optimization, -37%%)");
+    ESP_LOGI(TAG, "Total app stack: 56KB (vs 82KB before optimization, -32%%)");
     ESP_LOGI(TAG, "==================================================");
 
     return true;

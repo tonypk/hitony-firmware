@@ -36,6 +36,7 @@ static uint32_t g_speaking_start_time = 0;  // SPEAKING模式进入时间（用�
 static char g_session_id[16] = {0};  // 服务器分配的会话ID
 static bool g_hello_acked = false;  // hello握手是否完成
 static uint32_t g_drain_wait_count = 0;  // SPEAKING→IDLE队列排空计数
+static int64_t g_status_clear_time = 0;  // 非阻塞延迟清除UI状态文本（微秒时间戳）
 static int g_reconnect_attempts = 0;    // 指数退避重连计数（连接成功时重置）
 static bool g_auto_listen_enabled = false;  // TTS结束后回到IDLE等待唤醒词（true会导致噪音循环）
 static bool g_music_was_playing = false;    // 音乐因唤醒中断后标记，TTS结束后恢复音乐
@@ -98,6 +99,20 @@ static void init_device_identity() {
 // Forward declaration
 static void websocket_event_handler(void* handler_args, esp_event_base_t base,
                                      int32_t event_id, void* event_data);
+
+// WS帧重组状态（文件级，允许disconnect时清理）
+static uint8_t* s_reasm_buf = nullptr;
+static int s_reasm_offset = 0;
+static int s_reasm_total = 0;
+
+static void ws_clear_reassembly_state() {
+    if (s_reasm_buf) {
+        pool_free_by_size(s_reasm_buf, s_reasm_total);
+        s_reasm_buf = nullptr;
+    }
+    s_reasm_offset = 0;
+    s_reasm_total = 0;
+}
 
 /**
  * @brief 销毁并重建WebSocket客户端（用于auto-reconnect失败时的硬重连）
@@ -284,9 +299,7 @@ static void websocket_event_handler(void* handler_args, esp_event_base_t base,
 
             // --- Fragmented binary frame reassembly ---
             // ESP-IDF delivers chunks with payload_offset/payload_len when frame > buffer
-            static uint8_t* s_reasm_buf = nullptr;
-            static int s_reasm_offset = 0;
-            static int s_reasm_total = 0;
+            // (s_reasm_buf/offset/total are file-scope statics, cleared on disconnect)
 
             if (opcode == 0x02 && data->payload_len > data->data_len) {
                 if (data->payload_offset == 0) {
@@ -419,6 +432,9 @@ static void handle_ws_disconnected() {
     g_ws_connected = false;
     g_hello_acked = false;
     g_session_id[0] = '\0';
+
+    // 清理WS帧重组状态（防止reconnect后悬空指针）
+    ws_clear_reassembly_state();
 
     // 排空WS接收队列，释放pool buffers防止泄漏
     ws_raw_msg_t stale;
@@ -775,9 +791,8 @@ static void handle_ws_text(const char* data, uint16_t len) {
                     lvgl_ui_set_status("Transcribed");
                     ESP_LOGI(TAG, "Meeting completed");
                 }
-                // 2秒后恢复默认状态
-                vTaskDelay(pdMS_TO_TICKS(2000));
-                lvgl_ui_set_status("");
+                // 2秒后非阻塞恢复默认状态
+                g_status_clear_time = esp_timer_get_time() + 2000000;
             }
         }
     }
@@ -1122,7 +1137,13 @@ void main_control_task(void* arg) {
 
     // === 主循环 ===
     while (1) {
-        // === 0. 处理 WebSocket 接收队列（从瘦回调中转发的原始消息）===
+        // === 0a. 非阻塞延迟检查（UI状态文本定时清除）===
+        if (g_status_clear_time > 0 && esp_timer_get_time() >= g_status_clear_time) {
+            lvgl_ui_set_status("");
+            g_status_clear_time = 0;
+        }
+
+        // === 0b. 处理 WebSocket 接收队列（从瘦回调中转发的原始消息）===
         {
             ws_raw_msg_t raw_msg;
             int ws_processed = 0;
@@ -1496,7 +1517,7 @@ void main_control_task(void* arg) {
                 // remaining stack in StackType_t units (bytes on ESP32-S3)
                 struct { const char* name; uint32_t stack_bytes; } task_info[] = {
                     {"audio_main", 32768},
-                    {"main_ctrl",  8192},
+                    {"main_ctrl",  12288},
                     {"afe_task",   12288},
                     {"led_ctrl",   2048},
                 };
