@@ -476,7 +476,7 @@ void audio_main_task(void* arg) {
 
                         if (silence_start_time == 0) {
                             silence_start_time = now;
-                        } else if (now - silence_start_time > pdMS_TO_TICKS(1000)) {
+                        } else if (now - silence_start_time > pdMS_TO_TICKS(600)) {
                             // 短录音优化：<500ms录音可能是auto-listen后无人说话，直接回IDLE
                             uint32_t recording_duration_ms = (now - recording_start_time) * portTICK_PERIOD_MS;
                             if (recording_duration_ms < 500) {

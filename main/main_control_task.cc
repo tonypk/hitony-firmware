@@ -1299,10 +1299,10 @@ void main_control_task(void* arg) {
                     if (gap_ms < 500) { warned_2s = false; warned_4s = false; }
                 }
 
-                // [S0-3] 8秒超时保护（从5s放宽至8s：避免首包慢时误触超时）
+                // [S0-3] 15秒超时保护（配合流式TTS，首包到达更快但总时长可能更长）
                 if (g_speaking_start_time > 0 &&
-                    (xTaskGetTickCount() - g_speaking_start_time) > pdMS_TO_TICKS(8000)) {
-                    ESP_LOGW(TAG, "SPEAKING timeout (8s no packet, rx=%lu drop=%lu), sending abort and forcing IDLE",
+                    (xTaskGetTickCount() - g_speaking_start_time) > pdMS_TO_TICKS(15000)) {
+                    ESP_LOGW(TAG, "SPEAKING timeout (15s no packet, rx=%lu drop=%lu), sending abort and forcing IDLE",
                              g_tts_rx_count, g_tts_drop_count);
                     // 通知服务器设备超时，让服务器清理会话状态
                     ws_send_abort("speaking_timeout");
