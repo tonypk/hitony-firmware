@@ -49,9 +49,9 @@ void audio_main_task(void* arg) {
         .sample_rate = HITONY_SAMPLE_RATE,
         .channels = 2,           // 双麦克风（"MMR"模式：2mic + 1ref，启用AEC）
         .frame_size = 256,       // 每通道256 samples（匹配feed调用的256）
-        .enable_aec = true,      // AEC启用：使用"MR"格式（单麦+参考信号），实现TTS/音乐播放时的语音打断
-        .enable_ns = true,       // 启用降噪
-        .enable_agc = false,     // 禁用AGC（避免与WakeNet冲突）
+        .enable_aec = true,      // 回声消除
+        .enable_ns = true,       // 启用降噪（去噪对Whisper识别有帮助）
+        .enable_agc = false,     // AGC关闭：AGC_MODE_WAKENET会扭曲语音导致Whisper误识别
         .enable_vad = true,      // 启用VAD
         .enable_wakenet = true,  // 启用WakeNet
         .agc_level = 3,
@@ -234,13 +234,6 @@ void audio_main_task(void* arg) {
 
         // === 1. I2S 音频输入（IDLE, RECORDING, PLAYING模式）===
         int n = audio_i2s.read_frame((uint8_t*)i2s_buffer, sizeof(i2s_buffer));
-
-        // 首次I2S读取时打印调试信息
-        static bool first_i2s_read = true;
-        if (first_i2s_read && n > 0) {
-            ESP_LOGI(TAG, "🔊 首次I2S读取成功: n=%d bytes", n);
-            first_i2s_read = false;
-        }
 
         if (n > 0) {
             int stereo_samples = n / sizeof(int16_t);  // I2S立体声总样本数
@@ -476,7 +469,7 @@ void audio_main_task(void* arg) {
 
                         if (silence_start_time == 0) {
                             silence_start_time = now;
-                        } else if (now - silence_start_time > pdMS_TO_TICKS(600)) {
+                        } else if (now - silence_start_time > pdMS_TO_TICKS(800)) {
                             // 短录音优化：<500ms录音可能是auto-listen后无人说话，直接回IDLE
                             uint32_t recording_duration_ms = (now - recording_start_time) * portTICK_PERIOD_MS;
                             if (recording_duration_ms < 500) {
@@ -539,6 +532,16 @@ void audio_main_task(void* arg) {
                     // 当累积满enc_frame_size samples时，进行Opus编码
                     if (afe_accum_count >= enc_frame_size) {
                         g_opus_encode_count++;
+
+                        // 固定 3x 软件增益 (~9.5 dB)
+                        // 麦克风信号 ~-12 to -15 dBFS → 3x 后 ~-2.5 to -5.5 dBFS
+                        // 固定增益保留动态范围（语音/静音比例不变），避免噪声帧被过度放大
+                        for (size_t i = 0; i < enc_frame_size; i++) {
+                            int32_t amplified = (int32_t)afe_accumulator[i] * 3;
+                            afe_accumulator[i] = (int16_t)(
+                                (amplified > 32767) ? 32767 :
+                                (amplified < -32768) ? -32768 : amplified);
+                        }
 
                         alignas(16) uint8_t opus_packet[256];  // 20ms帧 ~100字节
                         int opus_len = opus_enc.encode(afe_accumulator, enc_frame_size,

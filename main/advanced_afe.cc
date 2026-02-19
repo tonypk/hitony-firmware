@@ -105,9 +105,22 @@ bool AdvancedAFE::init(const Config& config) {
         afe_config->aec_init = false;
     }
 
-    // 禁用AGC（避免与WakeNet冲突）
-    if (!config_.enable_agc) {
+    // AGC自动增益控制
+    if (config_.enable_agc) {
+        afe_config->agc_init = true;
+        afe_config->agc_mode = AFE_AGC_MODE_WAKENET;  // WakeNet协同模式
+        afe_config->agc_compression_gain_db = 18;     // 压缩增益18dB（默认9）
+        afe_config->agc_target_level_dbfs = 3;        // 目标 -3 dBFS
+        ESP_LOGI(TAG, "AGC enabled: mode=WAKENET, gain=%ddB, target=-%ddBFS",
+                 afe_config->agc_compression_gain_db, afe_config->agc_target_level_dbfs);
+    } else {
         afe_config->agc_init = false;
+    }
+
+    // NS噪声抑制
+    afe_config->ns_init = config_.enable_ns;
+    if (!config_.enable_ns) {
+        ESP_LOGI(TAG, "NS disabled (avoid over-suppression of quiet mic signal)");
     }
 
     // VAD设置
