@@ -324,6 +324,17 @@ void AdvancedAFE::enable_aec(bool enable) {
     }
 }
 
+void AdvancedAFE::enable_wakenet(bool enable) {
+    if (!afe_handle_ || !afe_data_) return;
+    if (enable) {
+        afe_handle_->enable_wakenet(afe_data_);
+        ESP_LOGI(TAG, "WakeNet dynamically ENABLED (meeting ended)");
+    } else {
+        afe_handle_->disable_wakenet(afe_data_);
+        ESP_LOGI(TAG, "WakeNet dynamically DISABLED (meeting mode, saving CPU)");
+    }
+}
+
 void AdvancedAFE::feed(const int16_t* data, size_t samples) {
     if (!afe_data_ || !input_queue_) {
         return;

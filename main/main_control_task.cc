@@ -765,16 +765,20 @@ static void handle_ws_text(const char* data, uint16_t len) {
         cJSON* status = cJSON_GetObjectItem(root, "status");
         if (cJSON_IsString(status)) {
             if (strcmp(status->valuestring, "recording") == 0) {
-                // 开始录音
+                // 开始录音：禁用WakeNet省CPU
                 lvgl_ui_set_state(UI_STATE_RECORDING);
                 start_recording_timer();
-                ESP_LOGI(TAG, "Meeting recording started");
+                audio_cmd_t meet_cmd = AUDIO_CMD_MEETING_START;
+                xQueueSend(g_audio_cmd_queue, &meet_cmd, 0);
+                ESP_LOGI(TAG, "Meeting recording started (WakeNet disabled)");
 
             } else if (strcmp(status->valuestring, "ended") == 0) {
-                // 结束录音
+                // 结束录音：恢复WakeNet
                 stop_recording_timer();
                 lvgl_ui_set_state(UI_STATE_WS_CONNECTED);
-                ESP_LOGI(TAG, "Meeting recording ended");
+                audio_cmd_t meet_cmd = AUDIO_CMD_MEETING_END;
+                xQueueSend(g_audio_cmd_queue, &meet_cmd, 0);
+                ESP_LOGI(TAG, "Meeting recording ended (WakeNet re-enabled)");
 
             } else if (strcmp(status->valuestring, "transcribing") == 0) {
                 // 转录中

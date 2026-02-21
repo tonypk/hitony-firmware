@@ -340,6 +340,16 @@ void audio_main_task(void* arg) {
                     ringbuffer_reset(&g_mic1_ringbuffer);  // 清除MIC1残留数据
                     if (afe_cfg.enable_aec) afe.enable_aec(false);  // 停止播放→禁用AEC
                     break;
+
+                case AUDIO_CMD_MEETING_START:
+                    ESP_LOGI(TAG, "Meeting mode: disabling WakeNet to save CPU");
+                    afe.enable_wakenet(false);
+                    break;
+
+                case AUDIO_CMD_MEETING_END:
+                    ESP_LOGI(TAG, "Meeting ended: re-enabling WakeNet");
+                    afe.enable_wakenet(true);
+                    break;
             }
         }
 

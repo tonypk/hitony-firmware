@@ -165,6 +165,8 @@ typedef enum {
     AUDIO_CMD_STOP_RECORDING,
     AUDIO_CMD_START_PLAYBACK,
     AUDIO_CMD_STOP_PLAYBACK,
+    AUDIO_CMD_MEETING_START,    // 会议模式：禁用WakeNet省CPU
+    AUDIO_CMD_MEETING_END,      // 会议结束：恢复WakeNet
 } audio_cmd_t;
 
 extern QueueHandle_t g_audio_cmd_queue;         // Main → Audio命令（长度4）

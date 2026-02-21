@@ -125,6 +125,12 @@ public:
      */
     void enable_aec(bool enable);
 
+    /**
+     * @brief 动态启用/禁用WakeNet（运行时切换）
+     * 会议录音模式下禁用WakeNet节省CPU，会议结束后恢复
+     */
+    void enable_wakenet(bool enable);
+
 private:
     // AFE处理任务
     static void afe_task(void* arg);
