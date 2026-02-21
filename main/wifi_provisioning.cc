@@ -232,6 +232,11 @@ try{
 var d=JSON.parse(x.responseText);
 var s=document.getElementById('net');
 s.innerHTML='';
+if(d.error){
+s.innerHTML='<option value="">-- Scan error --</option>';
+msg(d.error+' Try again or enter SSID manually.',0);
+return;
+}
 if(!d.networks||d.networks.length==0){
 s.innerHTML='<option value="">-- No networks found --</option>';
 msg('No networks found. Enter SSID manually.',0);
@@ -290,7 +295,7 @@ x.setRequestHeader('Content-Type','application/json');
 x.send(JSON.stringify({ssid:ssid,password:pwd}));
 }
 
-window.onload=function(){setTimeout(doScan,500)};
+window.onload=function(){setTimeout(doScan,1500)};
 </script>
 </body>
 </html>
@@ -329,23 +334,34 @@ static esp_err_t http_get_scan_handler(httpd_req_t* req) {
     if (current_mode == WIFI_MODE_AP) {
         ESP_LOGI(TAG, "Switching to APSTA mode for scanning...");
         esp_wifi_set_mode(WIFI_MODE_APSTA);
-        vTaskDelay(pdMS_TO_TICKS(100));  // 等待模式切换完成
+        vTaskDelay(pdMS_TO_TICKS(500));  // STA接口初始化需要较长时间
     }
 
-    // 启动扫描
+    // 启动扫描（带重试，APSTA切换后首次扫描可能失败）
     wifi_scan_config_t scan_config = {};
-    scan_config.show_hidden = false;  // 不显示隐藏网络，节省内存
+    scan_config.show_hidden = false;
     scan_config.scan_type = WIFI_SCAN_TYPE_ACTIVE;
 
-    esp_err_t err = esp_wifi_scan_start(&scan_config, true);
+    esp_err_t err = ESP_FAIL;
+    for (int retry = 0; retry < 3; retry++) {
+        err = esp_wifi_scan_start(&scan_config, true);
+        if (err == ESP_OK) break;
+        ESP_LOGW(TAG, "Scan attempt %d failed: %s, retrying...", retry + 1, esp_err_to_name(err));
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Scan failed: %s", esp_err_to_name(err));
-        // 切回AP模式
+        ESP_LOGE(TAG, "Scan failed after 3 attempts: %s", esp_err_to_name(err));
         if (current_mode == WIFI_MODE_AP) {
             esp_wifi_set_mode(WIFI_MODE_AP);
         }
-        httpd_resp_send_500(req);
-        return ESP_FAIL;
+        // 返回JSON错误而非500，让前端显示具体原因
+        char err_json[128];
+        snprintf(err_json, sizeof(err_json),
+                 "{\"networks\":[],\"error\":\"Scan failed: %s\"}", esp_err_to_name(err));
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, err_json, HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
     }
 
     // 限制最多10个网络，节省内存

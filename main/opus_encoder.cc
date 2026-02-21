@@ -30,7 +30,7 @@ bool OpusEncoder::init(int sample_rate, int channels, int bitrate) {
         .frame_duration = ESP_OPUS_ENC_FRAME_DURATION_20_MS,  // 20ms帧（减少~40ms编码延迟）
         .application_mode = ESP_OPUS_ENC_APPLICATION_VOIP,
         .complexity = 8,  // 高复杂度 (0-10范围)，优先质量（快速说话需要）
-        .enable_fec = false,
+        .enable_fec = true,
         .enable_dtx = false,
         .enable_vbr = true,  // 启用VBR：快速说话时自动提升码率
     };
